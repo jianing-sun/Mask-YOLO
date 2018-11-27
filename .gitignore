@@ -1,0 +1,6 @@
+*.ipynb_checkpoints
+*.idea
+*.h5
+*.npy
+*.apk
+*.pb
