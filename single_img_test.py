@@ -59,7 +59,7 @@ def run_inference_for_single_image(image, graph):
 if __name__ == '__main__':
     PATH_TO_CKPT = './models/mask_rcnn_inception_v2_coco_frozen_inference_graph.pb'
     category_index = {1: {'id': 1, 'name': u'food'}}
-    TEST_IMAGE_PATHS = ['14.jpg']
+    TEST_IMAGE_PATHS = ['rice.jpg']
     IMAGE_SIZE = (8, 8)
     NUM_CLASSES = 1
 
