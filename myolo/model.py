@@ -15,6 +15,11 @@ import keras.backend as K
 import keras.layers as KL
 import keras.engine as KE
 import keras.models as KM
+from mrcnn import utils
+
+# used for buliding mobilenet backbone
+from keras_applications import get_keras_submodule
+from keras_applications.mobilenet import _depthwise_conv_block
 
 # Requires TensorFlow 1.3+ and Keras 2.0.8+.
 from distutils.version import LooseVersion
@@ -22,147 +27,85 @@ assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
 assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
 
+backend = get_keras_submodule('backend')
+
+
+############################################################
+# Build an incomplete mobilenetv1 graph as backbone
+############################################################
+
+
+def relu6(x):
+    return backend.relu(x, max_value=6)
+
+
+def conv_block(inputs, filters, alpha=1.0, kernel=(3,3), strides=(1,1)):
+    channel_axis = 1 if backend.image_data_format() == 'channels_first' else -1
+    filters = int(filters * alpha)
+    x = KL.ZeroPadding2D(padding=(1, 1), name='conv1_pad')(inputs)
+    x = KL.Conv2D(filters, kernel,
+                      padding='valid',
+                      use_bias=False,
+                      strides=strides,
+                      name='conv1')(x)
+    x = KL.BatchNormalization(axis=channel_axis, name='conv1_bn')(x)
+    return KL.Activation(relu6, name='conv1_relu')(x)
+
+
+def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_multiplier=1):
+    """ Build a incompleted mobilenetv1 graph so as to generate enough spatial feature map
+    resolution (28x28), one more depthwise block added for bigger d dimension.
+    architecture: can be mobilenet, resnet50 or resnet100
+    stage5: boolean. if create stage5 for the network or not
+    alpha and depth_multiplier are parameters for mobilenet, the regular setting is 1 for both
+    """
+    assert architecture == 'mobilenet'
+
+    # 224x224x3
+    x = conv_block(input_image, 32, strides=(2, 2))
+
+    # 112x112x32
+    x = _depthwise_conv_block(x, 64, alpha, depth_multiplier, block_id=1)
+    x = _depthwise_conv_block(x, 64, alpha, depth_multiplier, strides=(2, 2), block_id=2)
+
+    # 56x56x64
+    x = _depthwise_conv_block(x, 128, alpha, depth_multiplier, block_id=3)
+    x = _depthwise_conv_block(x, 256, alpha, depth_multiplier, strides=(2, 2), block_id=4)
+
+    # 28x28x256
+    x = _depthwise_conv_block(x, 256, alpha, depth_multiplier, block_id=5)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=6)  # added by me
+
+    return x   # output feature map shape [28x28x512]
+
+
+def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
+    # 28x28x512
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, strides=(2, 2), block_id=7)
+
+    # 14x14x512
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=8)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=9)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=10)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=11)
+    x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=12)
+
+    x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier, strides=(2, 2), block_id=13)
+
+    # 7x7x1024
+    x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier, block_id=14)
+
+    # yolo output
+    x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1), padding='same', name='conv_23')(x)
+    output = KL.Reshape((config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES))(x)
+    output = KL.Lambda(lambda args: args[0])([output, true_boxes])
+
+
+
 ############################################################
 # Mask YOLO class
 ############################################################
 
-def darknet_graoh(input_image, architecture, stage5=False, train_bn=True):
-
-    def space_to_depth_x2(x):
-        return tf.space_to_depth(x, block_size=2)
-
-    assert architecture == "darknet"
-    # Layer 1
-    x = KL.Conv2D(32, (3, 3), strides=(1, 1), padding='same', name='conv_1', use_bias=False)(input_image)
-    x = KL.BatchNormalization(name='norm_1')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-    x = KL.MaxPooling2D(pool_size=(2, 2))(x)
-
-    # Layer 2
-    x = KL.Conv2D(64, (3, 3), strides=(1, 1), padding='same', name='conv_2', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_2')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-    x = KL.MaxPooling2D(pool_size=(2, 2))(x)
-
-    # Layer 3
-    x = KL.Conv2D(128, (3, 3), strides=(1, 1), padding='same', name='conv_3', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_3')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 4
-    x = KL.Conv2D(64, (1, 1), strides=(1, 1), padding='same', name='conv_4', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_4')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 5
-    x = KL.Conv2D(128, (3, 3), strides=(1, 1), padding='same', name='conv_5', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_5')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-    x = KL.MaxPooling2D(pool_size=(2, 2))(x)
-
-    # Layer 6
-    x = KL.Conv2D(256, (3, 3), strides=(1, 1), padding='same', name='conv_6', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_6')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 7
-    x = KL.Conv2D(128, (1, 1), strides=(1, 1), padding='same', name='conv_7', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_7')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 8
-    x = KL.Conv2D(256, (3, 3), strides=(1, 1), padding='same', name='conv_8', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_8')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-    x = KL.MaxPooling2D(pool_size=(2, 2))(x)
-
-    # Layer 9
-    x = KL.Conv2D(512, (3, 3), strides=(1, 1), padding='same', name='conv_9', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_9')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 10
-    x = KL.Conv2D(256, (1, 1), strides=(1, 1), padding='same', name='conv_10', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_10')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 11
-    x = KL.Conv2D(512, (3, 3), strides=(1, 1), padding='same', name='conv_11', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_11')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 12
-    x = KL.Conv2D(256, (1, 1), strides=(1, 1), padding='same', name='conv_12', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_12')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 13
-    x = KL.Conv2D(512, (3, 3), strides=(1, 1), padding='same', name='conv_13', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_13')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    skip_connection = x
-
-    x = KL.MaxPooling2D(pool_size=(2, 2))(x)
-
-    # Layer 14
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_14', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_14')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 15
-    x = KL.Conv2D(512, (1, 1), strides=(1, 1), padding='same', name='conv_15', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_15')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 16
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_16', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_16')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 17
-    x = KL.Conv2D(512, (1, 1), strides=(1, 1), padding='same', name='conv_17', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_17')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 18
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_18', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_18')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 19
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_19', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_19')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 20
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_20', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_20')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 21
-    skip_connection = KL.Conv2D(64, (1, 1), strides=(1, 1), padding='same', name='conv_21', use_bias=False)(
-        skip_connection)
-    skip_connection = KL.BatchNormalization(name='norm_21')(skip_connection)
-    skip_connection = KL.LeakyReLU(alpha=0.1)(skip_connection)
-    skip_connection = KL.Lambda(space_to_depth_x2)(skip_connection)
-
-    x = KL.concatenate([skip_connection, x])
-
-    # Layer 22
-    x = KL.Conv2D(1024, (3, 3), strides=(1, 1), padding='same', name='conv_22', use_bias=False)(x)
-    x = KL.BatchNormalization(name='norm_22')(x)
-    x = KL.LeakyReLU(alpha=0.1)(x)
-
-    # Layer 23
-    x = KL.Conv2D(BOX * (4 + 1 + CLASS), (1, 1), strides=(1, 1), padding='same', name='conv_23')(x)
-    output = KL.Reshape((GRID_H, GRID_W, BOX, 4 + 1 + CLASS))(x)
-
-    # small hack to allow true_boxes to be registered when Keras build the model
-    # for more information: https://github.com/fchollet/keras/issues/2790
-    output = KL.Lambda(lambda args: args[0])([output, true_boxes])
-
-    model = KM.Model([input_image, true_boxes], output)
 
 class MaskYOLO():
     """ Build the overall structure of MaskYOLO class
@@ -194,8 +137,10 @@ class MaskYOLO():
         input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
 
         if mode == "training":
-            # input_yolo_anchors
+
+            # input_yolo_anchors and true_boxes
             input_yolo_anchors = KL.Input(shape=[1, 1, 1, config.TRUE_BOX_BUFFER, 4])
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
 
             # GT Masks (zero padded)
             if config.USE_MINI_MASK:
@@ -209,7 +154,35 @@ class MaskYOLO():
         elif mode == "inference":
             raise NotImplementedError
 
-        if callable(config.BACKBONE):
-            raise NotImplementedError
-        else:
+        C4 = mobilenet_graph(input_image, config.BACKBONE, stage5=False)
+        myolo_feature_maps = rpn_feature_maps = C4
 
+        if mode == "training":
+            anchors = self.get_anchors(config.IMAGE_SHAPE)
+
+    def get_anchors(self, image_shape):
+        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
+        a = generate_anchors()
+
+
+def generate_anchors(yolo_stride, shape, feature_stride, anchor_stride, ANCHORS):
+    """ Generate anchors on feature map
+    ANCHORS: knn generated anchors in config.py
+    shape: [height, weight] spatial shape of the feature map over which to
+           generate anchors
+    feature_stride: stride of the feature map relative to the image in pixels
+    anchor_stride: stride of anchors on the feature map. 1 or 2
+    """
+    widths = (ANCHORS[::2] * yolo_stride) / feature_stride
+    heights = (ANCHORS[1:2] * yolo_stride) / feature_stride
+
+
+def compute_backbone_shapes(config, image_shape):
+    """Computes the width and height of each stage of the backbone network.
+    Return: [(height, width)].
+    """
+    # Currently supports mobilenet only
+    assert config.BACKBONE in ["mobilenet"]
+    return np.array(
+        [int(math.ceil(image_shape[0] / config.BACKBONE_STRIDES)),
+          int(math.ceil(image_shape[1] / config.BACKBONE_STRIDES))])
