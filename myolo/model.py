@@ -80,6 +80,11 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
 
 
 def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
+    """ YOLO branch following the feature map to generate bbox based on prior anchors
+    :param x: input feature map
+    :param true_boxes: input_true_boxes
+    :return: outputs
+    """
     # 28x28x512
     x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, strides=(2, 2), block_id=7)
 
@@ -98,8 +103,24 @@ def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
     # yolo output
     x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1), padding='same', name='conv_23')(x)
     output = KL.Reshape((config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES))(x)
+
+    # small hack to allow true_boxes to be registered when Keras build the model
     output = KL.Lambda(lambda args: args[0])([output, true_boxes])
 
+    return output
+
+
+def build_yolo_model(ture_boxes, config, depth):
+    """ Build a keras model for the YOLO model
+    :param depth: depth of input feature map, for now is 512
+    :return: a keras model object, the last layer of the model is a standard YOLOv2 output
+    with shape [None, GRID_H, GRID_W, N_BOX, 5 + NUM_CLASSES]
+    """
+    input_feature_map = KL.Input(shape=[None, None, depth], name="input_yolo_feature_map")
+    # input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
+    output = yolo_branch_graph(input_feature_map, ture_boxes, config)
+
+    return KM.Model([input_feature_map, ture_boxes], output, name="yolo_model")
 
 
 ############################################################
@@ -137,12 +158,11 @@ class MaskYOLO():
         input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
 
         if mode == "training":
-
             # input_yolo_anchors and true_boxes
             input_yolo_anchors = KL.Input(shape=[1, 1, 1, config.TRUE_BOX_BUFFER, 4])
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
 
-            # GT Masks (zero padded)
+            # GT Masks (zero padded)  TODO
             if config.USE_MINI_MASK:
                 input_gt_masks = KL.Input(shape=[config.MINI_MASK_SHAPE[0],
                                                  config.MINI_MASK_SHAPE[1], None],
@@ -157,24 +177,12 @@ class MaskYOLO():
         C4 = mobilenet_graph(input_image, config.BACKBONE, stage5=False)
         myolo_feature_maps = rpn_feature_maps = C4
 
-        if mode == "training":
-            anchors = self.get_anchors(config.IMAGE_SHAPE)
+        yolo_model = build_yolo_model(config, config.TOP_FEATURE_MAP_DEPTH)
+        yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
-    def get_anchors(self, image_shape):
-        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
-        a = generate_anchors()
+        # build YOLO branch graph
 
 
-def generate_anchors(yolo_stride, shape, feature_stride, anchor_stride, ANCHORS):
-    """ Generate anchors on feature map
-    ANCHORS: knn generated anchors in config.py
-    shape: [height, weight] spatial shape of the feature map over which to
-           generate anchors
-    feature_stride: stride of the feature map relative to the image in pixels
-    anchor_stride: stride of anchors on the feature map. 1 or 2
-    """
-    widths = (ANCHORS[::2] * yolo_stride) / feature_stride
-    heights = (ANCHORS[1:2] * yolo_stride) / feature_stride
 
 
 def compute_backbone_shapes(config, image_shape):

@@ -73,6 +73,7 @@ class Config(object):
 
     # Size of the top-down layers used to build the feature pyramid
     TOP_DOWN_PYRAMID_SIZE = 256
+    TOP_FEATURE_MAP_DEPTH = 512
 
     # Number of classification classes (including background)
     NUM_CLASSES = 1  # Override in sub-classes
