@@ -18,10 +18,19 @@ class Config(object):
     that need to be changed.
     """
 
+    # Number of classification classes (including background)
+    NUM_CLASSES = 1  # Override in sub-classes
     ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
     N_BOX = 5
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
+    BATCH_SIZE = 8
+    OBJECT_SCALE = 5.0
+    COORD_SCALE = 1.0
+    CLASS_SCALE = 1.0
+    NO_OBJECT_SCALE = 1.0
+    WARM_UP_BATCHES = 0
+    CLASS_WEIGHTS = np.ones(NUM_CLASSES, dtype='float32')
 
     # Name the configurations. For example, 'COCO', 'Experiment 3', ...etc.
     # Useful if your code needs to do things differently depending on which
@@ -74,9 +83,6 @@ class Config(object):
     # Size of the top-down layers used to build the feature pyramid
     TOP_DOWN_PYRAMID_SIZE = 256
     TOP_FEATURE_MAP_DEPTH = 512
-
-    # Number of classification classes (including background)
-    NUM_CLASSES = 1  # Override in sub-classes
 
     # Length of square anchor side in pixels
     RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)

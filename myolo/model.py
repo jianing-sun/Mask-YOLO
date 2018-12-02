@@ -1,5 +1,3 @@
-from mrcnn import utils, model, visualize
-
 import os
 import random
 import datetime
@@ -15,7 +13,7 @@ import keras.backend as K
 import keras.layers as KL
 import keras.engine as KE
 import keras.models as KM
-from mrcnn import utils
+from myolo.config import Config as config
 
 # used for buliding mobilenet backbone
 from keras_applications import get_keras_submodule
@@ -28,7 +26,6 @@ assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
 
 backend = get_keras_submodule('backend')
-
 
 ############################################################
 # Build an incomplete mobilenetv1 graph as backbone
@@ -77,6 +74,167 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
     x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=6)  # added by me
 
     return x   # output feature map shape [28x28x512]
+
+
+############################################################
+# YOLO branch to generat bbox and objectness prob
+############################################################
+
+def yolo_custom_loss(y_true, y_pred, true_boxes):
+    mask_shape = tf.shape(y_true)[:4]
+
+    cell_x = tf.to_float(tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
+    cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
+
+    cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, 5, 1])
+
+    coord_mask = tf.zeros(mask_shape)
+    conf_mask = tf.zeros(mask_shape)
+    class_mask = tf.zeros(mask_shape)
+
+    seen = tf.Variable(0.)
+    total_recall = tf.Variable(0.)
+
+    """
+    Adjust prediction
+    """
+    ### adjust x and y
+    pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
+
+    ### adjust w and h
+    pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
+
+    ### adjust confidence
+    pred_box_conf = tf.sigmoid(y_pred[..., 4])
+
+    ### adjust class probabilities
+    pred_box_class = y_pred[..., 5:]
+
+    """
+    Adjust ground truth
+    """
+    ### adjust x and y
+    true_box_xy = y_true[..., 0:2]  # relative position to the containing cell
+
+    ### adjust w and h
+    true_box_wh = y_true[..., 2:4]  # number of cells accross, horizontally and vertically
+
+    ### adjust confidence
+    true_wh_half = true_box_wh / 2.
+    true_mins = true_box_xy - true_wh_half
+    true_maxes = true_box_xy + true_wh_half
+
+    pred_wh_half = pred_box_wh / 2.
+    pred_mins = pred_box_xy - pred_wh_half
+    pred_maxes = pred_box_xy + pred_wh_half
+
+    intersect_mins = tf.maximum(pred_mins, true_mins)
+    intersect_maxes = tf.minimum(pred_maxes, true_maxes)
+    intersect_wh = tf.maximum(intersect_maxes - intersect_mins, 0.)
+    intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
+
+    true_areas = true_box_wh[..., 0] * true_box_wh[..., 1]
+    pred_areas = pred_box_wh[..., 0] * pred_box_wh[..., 1]
+
+    union_areas = pred_areas + true_areas - intersect_areas
+    iou_scores = tf.truediv(intersect_areas, union_areas)
+
+    true_box_conf = iou_scores * y_true[..., 4]
+
+    ### adjust class probabilities
+    true_box_class = tf.argmax(y_true[..., 5:], -1)
+
+    """
+    Determine the masks
+    """
+    ### coordinate mask: simply the position of the ground truth boxes (the predictors)
+    coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * config.COORD_SCALE
+
+    ### confidence mask: penelize predictors + penalize boxes with low IOU
+    # penalize the confidence of the boxes, which have IOU with some ground truth box < 0.6
+    true_xy = true_boxes[..., 0:2]
+    true_wh = true_boxes[..., 2:4]
+
+    true_wh_half = true_wh / 2.
+    true_mins = true_xy - true_wh_half
+    true_maxes = true_xy + true_wh_half
+
+    pred_xy = tf.expand_dims(pred_box_xy, 4)
+    pred_wh = tf.expand_dims(pred_box_wh, 4)
+
+    pred_wh_half = pred_wh / 2.
+    pred_mins = pred_xy - pred_wh_half
+    pred_maxes = pred_xy + pred_wh_half
+
+    intersect_mins = tf.maximum(pred_mins, true_mins)
+    intersect_maxes = tf.minimum(pred_maxes, true_maxes)
+    intersect_wh = tf.maximum(intersect_maxes - intersect_mins, 0.)
+    intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
+
+    true_areas = true_wh[..., 0] * true_wh[..., 1]
+    pred_areas = pred_wh[..., 0] * pred_wh[..., 1]
+
+    union_areas = pred_areas + true_areas - intersect_areas
+    iou_scores = tf.truediv(intersect_areas, union_areas)
+
+    best_ious = tf.reduce_max(iou_scores, axis=4)
+    conf_mask = conf_mask + tf.to_float(best_ious < 0.6) * (1 - y_true[..., 4]) * config.NO_OBJECT_SCALE
+
+    # penalize the confidence of the boxes, which are reponsible for corresponding ground truth box
+    conf_mask = conf_mask + y_true[..., 4] * config.OBJECT_SCALE
+
+    ### class mask: simply the position of the ground truth boxes (the predictors)
+    class_mask = y_true[..., 4] * tf.gather(config.CLASS_WEIGHTS, true_box_class) * config.CLASS_SCALE
+
+    """
+    Warm-up training
+    """
+    no_boxes_mask = tf.to_float(coord_mask < config.COORD_SCALE / 2.)
+    seen = tf.assign_add(seen, 1.)
+
+    true_box_xy, true_box_wh, coord_mask = tf.cond(tf.less(seen, config.WARM_UP_BATCHES),
+                                                   lambda: [true_box_xy + (0.5 + cell_grid) * no_boxes_mask,
+                                                            true_box_wh + tf.ones_like(true_box_wh) * np.reshape(
+                                                                config.ANCHORS, [1, 1, 1, config.N_BOX, 2]) * no_boxes_mask,
+                                                            tf.ones_like(coord_mask)],
+                                                   lambda: [true_box_xy,
+                                                            true_box_wh,
+                                                            coord_mask])
+
+    """
+    Finalize the loss
+    """
+    nb_coord_box = tf.reduce_sum(tf.to_float(coord_mask > 0.0))
+    nb_conf_box = tf.reduce_sum(tf.to_float(conf_mask > 0.0))
+    nb_class_box = tf.reduce_sum(tf.to_float(class_mask > 0.0))
+
+    loss_xy = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy) * coord_mask) / (nb_coord_box + 1e-6) / 2.
+    loss_wh = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh) * coord_mask) / (nb_coord_box + 1e-6) / 2.
+    loss_conf = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask) / (nb_conf_box + 1e-6) / 2.
+    loss_class = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=true_box_class, logits=pred_box_class)
+    loss_class = tf.reduce_sum(loss_class * class_mask) / (nb_class_box + 1e-6)
+
+    loss = loss_xy + loss_wh + loss_conf + loss_class
+
+    nb_true_box = tf.reduce_sum(y_true[..., 4])
+    nb_pred_box = tf.reduce_sum(tf.to_float(true_box_conf > 0.5) * tf.to_float(pred_box_conf > 0.3))
+
+    """
+    Debugging code
+    """
+    current_recall = nb_pred_box / (nb_true_box + 1e-6)
+    total_recall = tf.assign_add(total_recall, current_recall)
+
+    loss = tf.Print(loss, [tf.zeros((1))], message='Dummy Line \t', summarize=1000)
+    loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
+    loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
+    loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
+    loss = tf.Print(loss, [loss_class], message='Loss Class \t', summarize=1000)
+    loss = tf.Print(loss, [loss], message='Total Loss \t', summarize=1000)
+    loss = tf.Print(loss, [current_recall], message='Current Recall \t', summarize=1000)
+    loss = tf.Print(loss, [total_recall / seen], message='Average Recall \t', summarize=1000)
+
+    return loss
 
 
 def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
@@ -298,6 +456,44 @@ def build_fpn_mask_graph(rois, feature_maps,
     return x
 
 
+def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
+    """Mask binary cross-entropy loss for the masks head.
+
+    target_masks: [batch, num_rois, height, width].
+        A float32 tensor of values 0 or 1. Uses zero padding to fill array.
+    target_class_ids: [batch, num_rois]. Integer class IDs. Zero padded.
+    pred_masks: [batch, proposals, height, width, num_classes] float32 tensor
+                with values from 0 to 1.
+    """
+    # Reshape for simplicity. Merge first two dimensions into one.
+    target_class_ids = K.reshape(target_class_ids, (-1,))
+    mask_shape = tf.shape(target_masks)
+    target_masks = K.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]))
+    pred_shape = tf.shape(pred_masks)
+    pred_masks = K.reshape(pred_masks,
+                           (-1, pred_shape[2], pred_shape[3], pred_shape[4]))
+    # Permute predicted masks to [N, num_classes, height, width]
+    pred_masks = tf.transpose(pred_masks, [0, 3, 1, 2])
+
+    # Only positive ROIs contribute to the loss. And only
+    # the class specific mask of each ROI.
+    positive_ix = tf.where(target_class_ids > 0)[:, 0]
+    positive_class_ids = tf.cast(
+        tf.gather(target_class_ids, positive_ix), tf.int64)
+    indices = tf.stack([positive_ix, positive_class_ids], axis=1)
+
+    # Gather the masks (predicted and true) that contribute to loss
+    y_true = tf.gather(target_masks, positive_ix)
+    y_pred = tf.gather_nd(pred_masks, indices)
+
+    # Compute binary cross entropy. If no positive ROIs, then return 0.
+    # shape: [batch, roi, num_classes]
+    loss = K.switch(tf.size(y_true) > 0,
+                    K.binary_crossentropy(target=y_true, output=y_pred),
+                    tf.constant(0.0))
+    loss = K.mean(loss)
+    return loss
+
 ############################################################
 # Mask YOLO class
 ############################################################
@@ -334,8 +530,8 @@ class MaskYOLO():
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
-            input_yolo_anchors = KL.Input(shape=[1, 1, 1, config.TRUE_BOX_BUFFER, 4])
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
+            input_yolo_target = KL.Input(shape=[None, 5], name="input_yolo_target", dtype=tf.float32)
 
             # GT Masks (zero padded)  TODO
             if config.USE_MINI_MASK:
@@ -361,18 +557,24 @@ class MaskYOLO():
         rois = batch_decode_yolo(yolo_output, config.ANCHORS, config.NUM_CLASSES, feature_map_shape)
 
         # TODO: build_mask_graph(rois, myolo_feature_maps, config.MASK_POOL_SIZE)
-        mrcnn_mask = build_fpn_mask_graph(rois, myolo_feature_maps,
+        myolo_mask = build_fpn_mask_graph(rois, myolo_feature_maps,
                                           config.MASK_POOL_SIZE,
                                           config.NUM_CLASSES)
+        output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
         # TODO: Losses
         # 1. YOLO custom loss (bbox loss and binary classification loss)
+        yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
+            [input_yolo_target, yolo_output, input_true_boxes]
+        )
         # 2. mask_loss
+        mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
+            [target_mask, target_class_ids, myolo_mask])
 
         # Model
-        inputs = [input_image, input_true_boxes, input_yolo_anchors]
+        inputs = [input_image, input_true_boxes]
 
-        outputs = [mrcnn_class, myolo_mask, yolo_loss, mask_loss]
+        outputs = [output_rois, myolo_mask, yolo_sum_loss, mask_loss]
 
         model = KM.Model(inputs, outputs, name="mask_yolo")
 
