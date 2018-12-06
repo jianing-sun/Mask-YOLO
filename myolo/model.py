@@ -410,7 +410,7 @@ def build_fpn_mask_graph(rois, feature_maps,
     """Builds the computation graph of the mask head of Feature Pyramid Network.
 
     rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
-          coordinates.
+          coordinates. Note in my case is [batch, num_rois, (x1, y1, x2, y2)]
     feature_maps: List of feature maps from different layers of the pyramid,
                   [P2, P3, P4, P5]. Each has a different resolution.
     image_meta: [batch, (meta data)] Image details. See compose_image_meta()
@@ -554,9 +554,13 @@ class MaskYOLO():
         # TODO: decode yolo network output to anchors with the size of feature map
         feature_map_shape = [(config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0],
                              (config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0]]
-        rois = batch_decode_yolo(yolo_output, config.ANCHORS, config.NUM_CLASSES, feature_map_shape)
+        rois = []
+        for i in range(0, config.BATCH_SIZE):
+            rois.append([])
+            boxes = decode_yolo4one(yolo_output[0], config.ANCHORS, config.NUM_CLASSES, feature_map_shape)
+            for box in boxes:
+                rois[i].append([box.ymin, box.xmin, box.ymax, box.ymin])
 
-        # TODO: build_mask_graph(rois, myolo_feature_maps, config.MASK_POOL_SIZE)
         myolo_mask = build_fpn_mask_graph(rois, myolo_feature_maps,
                                           config.MASK_POOL_SIZE,
                                           config.NUM_CLASSES)
@@ -565,8 +569,7 @@ class MaskYOLO():
         # TODO: Losses
         # 1. YOLO custom loss (bbox loss and binary classification loss)
         yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
-            [input_yolo_target, yolo_output, input_true_boxes]
-        )
+            [input_yolo_target, yolo_output, input_true_boxes])
         # 2. mask_loss
         mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
             [target_mask, target_class_ids, myolo_mask])
@@ -652,7 +655,7 @@ def _interval_overlap(interval_a, interval_b):
             return min(x2,x4) - x3
 
 
-def batch_decode_yolo(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
+def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
     """
     :param yolo_out: with shape [batch, 7, 7, 5, 7]
     :param anchors:
@@ -661,7 +664,7 @@ def batch_decode_yolo(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0
     :param nms_thre:
     :return:
     """
-    batch, grid_h, grid_w, nb_box = yolo_out.shape[:4]
+    grid_h, grid_w, nb_box = yolo_out.shape[:3]
 
     boxes = []
     fm_height = int(feature_map_shape[0])
@@ -717,8 +720,6 @@ def batch_decode_yolo(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0
 
     # remove the boxes which are less likely than a obj_threshold
     boxes = [box for box in boxes if box.get_score() > obj_thre]
-
-    # convert the unit from network image input to feature map
 
     return boxes
 
