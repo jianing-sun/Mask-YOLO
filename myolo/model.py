@@ -14,6 +14,7 @@ import keras.layers as KL
 import keras.engine as KE
 import keras.models as KM
 from myolo.config import Config as config
+import myolo.myolo_utils as mutils
 from mrcnn import utils
 
 # used for buliding mobilenet backbone
@@ -734,7 +735,7 @@ class MaskYOLO():
     """ Build the overall structure of MaskYOLO class
     which only generate bbox and mask, no classification involved
     """
-    def __init__(self, mode, config, model_dir):
+    def __init__(self, mode, config, model_dir=None):
         """
         mode: Either "training" or "inference"
         config: A Sub-class of the Config class
@@ -762,7 +763,8 @@ class MaskYOLO():
         if mode == "training":
             # input_yolo_anchors and true_boxes
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
-            input_yolo_target = KL.Input(shape=[None, 5], name="input_yolo_target", dtype=tf.float32)
+            input_yolo_target = KL.Input(shape=[None, config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
+                                         name="input_yolo_target", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
             # 1. GT Class IDs (zero padded)
@@ -822,7 +824,8 @@ class MaskYOLO():
             [target_mask, target_class_ids, myolo_mask])
 
         # Model
-        inputs = [input_image, input_true_boxes]
+        inputs = [input_image, input_true_boxes, input_yolo_target,
+                  input_gt_class_ids, gt_boxes, input_gt_masks]
 
         outputs = [output_rois, myolo_mask, yolo_sum_loss, mask_loss]
 
@@ -830,16 +833,107 @@ class MaskYOLO():
 
         return model
 
+    def train(self, train_dataset, val_dataset, learning_rate, epochs, layers,
+              augmentation=None, custom_callbacks=None, no_augmentation_sources=None):
+        """Train the model.
+        train_dataset, val_dataset: Training and validation Dataset objects.
+        learning_rate: The learning rate to train with
+        epochs: Number of training epochs. Note that previous training epochs
+                are considered to be done alreay, so this actually determines
+                the epochs to train in total rather than in this particaular
+                call.
+        layers: Allows selecting wich layers to train. It can be:
+            - A regular expression to match layer names to train
+            - One of these predefined values:
+              heads: The RPN, classifier and mask heads of the network
+              all: All the layers
+              3+: Train Resnet stage 3 and up
+              4+: Train Resnet stage 4 and up
+              5+: Train Resnet stage 5 and up
+        augmentation: Optional. An imgaug (https://github.com/aleju/imgaug)
+            augmentation. For example, passing imgaug.augmenters.Fliplr(0.5)
+            flips images right/left 50% of the time. You can pass complex
+            augmentations as well. This augmentation applies 50% of the
+            time, and when it does it flips images right/left half the time
+            and adds a Gaussian blur with a random sigma in range 0 to 5.
 
-def compute_backbone_shapes(config, image_shape):
-    """Computes the width and height of each stage of the backbone network.
-    Return: [(height, width)].
-    """
-    # Currently supports mobilenet only
-    assert config.BACKBONE in ["mobilenet"]
-    return np.array(
-        [int(math.ceil(image_shape[0] / config.BACKBONE_STRIDES)),
-          int(math.ceil(image_shape[1] / config.BACKBONE_STRIDES))])
+                augmentation = imgaug.augmenters.Sometimes(0.5, [
+                    imgaug.augmenters.Fliplr(0.5),
+                    imgaug.augmenters.GaussianBlur(sigma=(0.0, 5.0))
+                ])
+	    custom_callbacks: Optional. Add custom callbacks to be called
+	        with the keras fit_generator method. Must be list of type keras.callbacks.
+        no_augmentation_sources: Optional. List of sources to exclude for
+            augmentation. A source is string that identifies a dataset and is
+            defined in the Dataset class.
+        """
+        assert self.mode == "training", "Create model in training mode."
+
+        # Pre-defined layer regular expressions
+        layer_regex = {
+            # all layers but the backbone
+            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # From a specific Resnet stage and up
+            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # All layers
+            "all": ".*",
+        }
+        if layers in layer_regex.keys():
+            layers = layer_regex[layers]
+
+        # Data generators
+        train_generator = mutils.data_generator(train_dataset, self.config, shuffle=True,
+                                                augmentation=augmentation,
+                                                batch_size=self.config.BATCH_SIZE,
+                                                no_augmentation_sources=no_augmentation_sources)
+        val_generator = mutils.data_generator(val_dataset, self.config, shuffle=True,
+                                              batch_size=self.config.BATCH_SIZE)
+
+        # Create log_dir if it does not exist
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
+
+        # Callbacks
+        callbacks = [
+            keras.callbacks.TensorBoard(log_dir=self.log_dir,
+                                        histogram_freq=0, write_graph=True, write_images=False),
+            keras.callbacks.ModelCheckpoint(self.checkpoint_path,
+                                            verbose=0, save_weights_only=True),
+        ]
+
+        # Add custom callbacks to the list
+        if custom_callbacks:
+            callbacks += custom_callbacks
+
+        # Train
+        # log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
+        # log("Checkpoint Path: {}".format(self.checkpoint_path))
+        self.set_trainable(layers)
+        self.compile(learning_rate, self.config.LEARNING_MOMENTUM)
+
+        # Work-around for Windows: Keras fails on Windows when using
+        # multiprocessing workers. See discussion here:
+        # https://github.com/matterport/Mask_RCNN/issues/13#issuecomment-353124009
+        if os.name is 'nt':
+            workers = 0
+        else:
+            workers = multiprocessing.cpu_count()
+
+        self.keras_model.fit_generator(
+            train_generator,
+            initial_epoch=self.epoch,
+            epochs=epochs,
+            steps_per_epoch=self.config.STEPS_PER_EPOCH,
+            callbacks=callbacks,
+            validation_data=val_generator,
+            validation_steps=self.config.VALIDATION_STEPS,
+            max_queue_size=100,
+            workers=workers,
+            use_multiprocessing=True,
+        )
+        self.epoch = max(self.epoch, epochs)
 
 
 def norm_boxes_graph(boxes, shape):
