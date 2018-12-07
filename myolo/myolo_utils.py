@@ -3,7 +3,7 @@ import math
 from mrcnn import utils
 import random
 import logging
-from myolo.model import BoundBox, bbox_iou
+
 
 
 def compute_backbone_shapes(config, image_shape):
@@ -23,6 +23,62 @@ def mold_image(images, config):
     colors in RGB order.
     """
     return images.astype(np.float32) - config.MEAN_PIXEL
+
+
+class BoundBox:
+    def __init__(self, xmin, ymin, xmax, ymax, c=None, classes=None):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.xmax = xmax
+        self.ymax = ymax
+
+        self.c = c
+        self.classes = classes
+
+        self.label = -1
+        self.score = -1
+
+    def get_label(self):
+        if self.label == -1:
+            self.label = np.argmax(self.classes)
+
+        return self.label
+
+    def get_score(self):
+        if self.score == -1:
+            self.score = self.classes[self.get_label()]
+
+        return self.score
+
+
+def bbox_iou(box1, box2):
+    intersect_w = _interval_overlap([box1.xmin, box1.xmax], [box2.xmin, box2.xmax])
+    intersect_h = _interval_overlap([box1.ymin, box1.ymax], [box2.ymin, box2.ymax])
+
+    intersect = intersect_w * intersect_h
+
+    w1, h1 = box1.xmax - box1.xmin, box1.ymax - box1.ymin
+    w2, h2 = box2.xmax - box2.xmin, box2.ymax - box2.ymin
+
+    union = w1 * h1 + w2 * h2 - intersect
+
+    return float(intersect) / union
+
+
+def _interval_overlap(interval_a, interval_b):
+    x1, x2 = interval_a
+    x3, x4 = interval_b
+
+    if x3 < x1:
+        if x4 < x1:
+            return 0
+        else:
+            return min(x2, x4) - x1
+    else:
+        if x2 < x3:
+            return 0
+        else:
+            return min(x2, x4) - x3
 
 
 ############################################################
@@ -130,8 +186,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
 
 
 def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
-                   random_rois=0, batch_size=1, detection_targets=False,
-                   no_augmentation_sources=None):
+                   batch_size=1, no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
     bounding box deltas, and masks.
 
@@ -324,3 +379,5 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             error_count += 1
             if error_count > 5:
                 raise
+
+

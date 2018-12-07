@@ -1,33 +1,28 @@
-import os
-import random
-import datetime
-import re
-import math
-import logging
-from collections import OrderedDict
 import multiprocessing
-import numpy as np
-import tensorflow as tf
+import os
+# Requires TensorFlow 1.3+ and Keras 2.0.8+.
+from distutils.version import LooseVersion
+
 import keras
 import keras.backend as K
-import keras.layers as KL
 import keras.engine as KE
+import keras.layers as KL
 import keras.models as KM
-from myolo.config import Config as config
-import myolo.myolo_utils as mutils
-from mrcnn import utils
-
+import numpy as np
+import tensorflow as tf
 # used for buliding mobilenet backbone
 from keras_applications import get_keras_submodule
 from keras_applications.mobilenet import _depthwise_conv_block
+from mrcnn import utils
 
-# Requires TensorFlow 1.3+ and Keras 2.0.8+.
-from distutils.version import LooseVersion
+import myolo.myolo_utils as mutils
+from myolo.config import Config as config
+
 assert LooseVersion(tf.__version__) >= LooseVersion("1.3")
 assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 
-
 backend = get_keras_submodule('backend')
+
 
 ############################################################
 # Build an incomplete mobilenetv1 graph as backbone
@@ -38,15 +33,15 @@ def relu6(x):
     return backend.relu(x, max_value=6)
 
 
-def conv_block(inputs, filters, alpha=1.0, kernel=(3,3), strides=(1,1)):
+def conv_block(inputs, filters, alpha=1.0, kernel=(3, 3), strides=(1, 1)):
     channel_axis = 1 if backend.image_data_format() == 'channels_first' else -1
     filters = int(filters * alpha)
     x = KL.ZeroPadding2D(padding=(1, 1), name='conv1_pad')(inputs)
     x = KL.Conv2D(filters, kernel,
-                      padding='valid',
-                      use_bias=False,
-                      strides=strides,
-                      name='conv1')(x)
+                  padding='valid',
+                  use_bias=False,
+                  strides=strides,
+                  name='conv1')(x)
     x = KL.BatchNormalization(axis=channel_axis, name='conv1_bn')(x)
     return KL.Activation(relu6, name='conv1_relu')(x)
 
@@ -75,7 +70,7 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
     x = _depthwise_conv_block(x, 256, alpha, depth_multiplier, block_id=5)
     x = _depthwise_conv_block(x, 512, alpha, depth_multiplier, block_id=6)  # added by me
 
-    return x   # output feature map shape [28x28x512]
+    return x  # output feature map shape [28x28x512]
 
 
 ############################################################
@@ -85,7 +80,8 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
 def yolo_custom_loss(y_true, y_pred, true_boxes):
     mask_shape = tf.shape(y_true)[:4]
 
-    cell_x = tf.to_float(tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
+    cell_x = tf.to_float(
+        tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
     cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
 
     cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, 5, 1])
@@ -197,7 +193,8 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     true_box_xy, true_box_wh, coord_mask = tf.cond(tf.less(seen, config.WARM_UP_BATCHES),
                                                    lambda: [true_box_xy + (0.5 + cell_grid) * no_boxes_mask,
                                                             true_box_wh + tf.ones_like(true_box_wh) * np.reshape(
-                                                                config.ANCHORS, [1, 1, 1, config.N_BOX, 2]) * no_boxes_mask,
+                                                                config.ANCHORS,
+                                                                [1, 1, 1, config.N_BOX, 2]) * no_boxes_mask,
                                                             tf.ones_like(coord_mask)],
                                                    lambda: [true_box_xy,
                                                             true_box_wh,
@@ -261,7 +258,8 @@ def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
     x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier, block_id=14)
 
     # yolo output
-    x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1), padding='same', name='conv_23')(x)
+    x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1), padding='same', name='conv_23')(
+        x)
     output = KL.Reshape((config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES))(x)
 
     # small hack to allow true_boxes to be registered when Keras build the model
@@ -399,7 +397,7 @@ class PyramidROIAlign(KE.Layer):
         return pooled
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1], )
+        return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1],)
 
 
 ############################################################
@@ -726,6 +724,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
     loss = K.mean(loss)
     return loss
 
+
 ############################################################
 # Mask YOLO class
 ############################################################
@@ -735,6 +734,7 @@ class MaskYOLO():
     """ Build the overall structure of MaskYOLO class
     which only generate bbox and mask, no classification involved
     """
+
     def __init__(self, mode, config, model_dir=None):
         """
         mode: Either "training" or "inference"
@@ -751,20 +751,21 @@ class MaskYOLO():
         assert mode in ['training', 'inference']
 
         # Image size must be divided by 2 multiple times
-        h, w = config.IMAGE_SHAPE[:2]
-        if h / 2**6 != int(h / 2**6) or w / 2**6 != int(w / 2**6):
-            raise Exception("Image size must be dividable by 2 at least 6 times "
-                            "to avoid fractions when downscaling and upscaling."
-                            "For example, use 256, 320, 384, 448, 512, ... etc. ")
+        # h, w = config.IMAGE_SHAPE[:2]
+        # if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
+        #     raise Exception("Image size must be dividable by 2 at least 6 times "
+        #                     "to avoid fractions when downscaling and upscaling."
+        #                     "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
         # Inputs
-        input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+        input_image = KL.Input(shape=[224, 224, config.IMAGE_SHAPE[2]], name="input_image")
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
-            input_yolo_target = KL.Input(shape=[None, config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
-                                         name="input_yolo_target", dtype=tf.float32)
+            input_yolo_target = KL.Input(
+                shape=[None, config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
+                name="input_yolo_target", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
             # 1. GT Class IDs (zero padded)
@@ -796,15 +797,10 @@ class MaskYOLO():
         yolo_model = build_yolo_model(input_true_boxes, config, config.TOP_FEATURE_MAP_DEPTH)
         yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
-        feature_map_shape = [(config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0],
-                             (config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0]]
-        yolo_rois = []
-        for i in range(0, config.BATCH_SIZE):
-            yolo_rois.append([])
-            boxes = decode_yolo4one(yolo_output[0], config.ANCHORS,
-                                    config.NUM_CLASSES, feature_map_shape)
-            for box in boxes:
-                yolo_rois[i].append([box.ymin, box.xmin, box.ymax, box.ymin])
+        feature_map_shape = [int((config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0]),
+                             int((config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0])]
+
+        yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
 
         rois, target_class_ids, target_bbox, target_mask = \
             DetectionTargetLayer(config, name="proposal_targets")([
@@ -892,20 +888,20 @@ class MaskYOLO():
                                               batch_size=self.config.BATCH_SIZE)
 
         # Create log_dir if it does not exist
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+        # if not os.path.exists(self.log_dir):
+        #     os.makedirs(self.log_dir)
 
         # Callbacks
-        callbacks = [
-            keras.callbacks.TensorBoard(log_dir=self.log_dir,
-                                        histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint(self.checkpoint_path,
-                                            verbose=0, save_weights_only=True),
-        ]
+        # callbacks = [
+        #     keras.callbacks.TensorBoard(log_dir=self.log_dir,
+        #                                 histogram_freq=0, write_graph=True, write_images=False),
+        #     keras.callbacks.ModelCheckpoint(self.checkpoint_path,
+        #                                     verbose=0, save_weights_only=True),
+        # ]
 
         # Add custom callbacks to the list
-        if custom_callbacks:
-            callbacks += custom_callbacks
+        # if custom_callbacks:
+        #     callbacks += custom_callbacks
 
         # Train
         # log("\nStarting at epoch {}. LR={}\n".format(self.epoch, learning_rate))
@@ -959,146 +955,108 @@ def norm_boxes_graph(boxes, shape):
 ############################################################
 
 
-class BoundBox:
-    def __init__(self, xmin, ymin, xmax, ymax, c=None, classes=None):
-        self.xmin = xmin
-        self.ymin = ymin
-        self.xmax = xmax
-        self.ymax = ymax
+def batch_yolo_decode(y_pred, feature_map_shape, config):
+    mask_shape = tf.shape(y_pred)[:4]
 
-        self.c = c
-        self.classes = classes
+    cell_x = tf.to_float(
+        tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
+    cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
 
-        self.label = -1
-        self.score = -1
+    cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
 
-    def get_label(self):
-        if self.label == -1:
-            self.label = np.argmax(self.classes)
+    """ Adjust prediction """
+    ### adjust x and y
+    pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
 
-        return self.label
+    ### adjust w and h
+    pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
 
-    def get_score(self):
-        if self.score == -1:
-            self.score = self.classes[self.get_label()]
+    """ get x, y coordinates """
+    # pred_xy = tf.expand_dims(pred_box_xy, 4)
+    # pred_wh = tf.expand_dims(pred_box_wh, 4)
 
-        return self.score
+    pred_wh_half = pred_box_wh / 2.
+    pred_mins = pred_box_xy - pred_wh_half
+    pred_maxes = pred_box_xy + pred_wh_half
 
+    # xmin, ymin, xmax, ymax
+    output_boxes = tf.concat([pred_mins * feature_map_shape[0], pred_maxes * feature_map_shape[1]], axis=-1)
+    output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
+                                             output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
+                                             output_boxes.shape[-1]])
 
-def bbox_iou(box1, box2):
-    intersect_w = _interval_overlap([box1.xmin, box1.xmax], [box2.xmin, box2.xmax])
-    intersect_h = _interval_overlap([box1.ymin, box1.ymax], [box2.ymin, box2.ymax])
-
-    intersect = intersect_w * intersect_h
-
-    w1, h1 = box1.xmax - box1.xmin, box1.ymax - box1.ymin
-    w2, h2 = box2.xmax - box2.xmin, box2.ymax - box2.ymin
-
-    union = w1 * h1 + w2 * h2 - intersect
-
-    return float(intersect) / union
+    return output_boxes
 
 
-def _interval_overlap(interval_a, interval_b):
-    x1, x2 = interval_a
-    x3, x4 = interval_b
-
-    if x3 < x1:
-        if x4 < x1:
-            return 0
-        else:
-            return min(x2,x4) - x1
-    else:
-        if x2 < x3:
-             return 0
-        else:
-            return min(x2,x4) - x3
-
-
-def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
-    """
-    :param yolo_out: with shape [7, 7, 5, 7]
-    :param anchors:
-    :param nb_class:
-    :param obj_thre:
-    :param nms_thre:
-    :return:
-    """
-    grid_h, grid_w, nb_box = yolo_out.shape[:3]
-
-    boxes = []
-    fm_height = int(feature_map_shape[0])
-    fm_width = int(feature_map_shape[1])
-
-    # decode the output by the network
-    yolo_out[..., 4] = _sigmoid(yolo_out[..., 4])  # sigmoid for confidence score to make it from 0 to 1
-    yolo_out[..., 5:] = yolo_out[..., 4][..., np.newaxis] * _softmax(yolo_out[..., 5:])  # softmax for class prob
-    # yolo_out[..., 5:] *= yolo_out[..., 5:] > obj_thre  # select bbox with prob higher than threshold
-
-    for row in range(grid_h):
-        for col in range(grid_w):
-            for b in range(nb_box):
-                # from 4th element onwards are confidence and class classes
-                classes = yolo_out[row, col, b, 5:]
-
-                if np.sum(classes) > 0:
-                    # first 4 elements are x, y, w, and h
-                    x, y, w, h = yolo_out[row, col, b, :4]
-
-                    x = (col + _sigmoid(x)) / grid_w  # center position, unit: image width
-                    y = (row + _sigmoid(y)) / grid_h  # center position, unit: image height
-                    w = anchors[2 * b + 0] * np.exp(w) / grid_w  # unit: image width
-                    h = anchors[2 * b + 1] * np.exp(h) / grid_h  # unit: image height
-                    confidence = yolo_out[row, col, b, 4]
-
-                    # generate bbox on the 28x28 feature max
-                    box = BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, confidence, classes)
-                    xmin = min(int(box.xmin * fm_width), fm_height)
-                    ymin = min(int(box.ymin * fm_height), fm_height)
-                    xmax = min(int(box.xmax * fm_width), fm_width)
-                    ymax = min(int(box.ymax * fm_height), fm_height)
-
-                    box = BoundBox(xmin, ymin, xmax, ymax, confidence, classes)
-                    # box = BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, confidence, classes)
-                    boxes.append(box)  # xmin, ymin, xmax, ymax, confidence, classes
-
-    # suppress non-maximal boxes
-    for c in range(nb_class):
-        sorted_indices = list(reversed(np.argsort([box.classes[c] for box in boxes])))
-
-        for i in range(len(sorted_indices)):
-            index_i = sorted_indices[i]
-
-            if boxes[index_i].classes[c] == 0:
-                continue
-            else:
-                for j in range(i + 1, len(sorted_indices)):
-                    index_j = sorted_indices[j]
-
-                    if bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thre:
-                        boxes[index_j].classes[c] = 0
-
-    # remove the boxes which are less likely than a obj_threshold
-    # boxes = [box for box in boxes if box.get_score() > obj_thre]
-
-    return boxes
-
-
-def _sigmoid(x):
-    return 1. / (1. + np.exp(-x))
-
-
-def _softmax(x, axis=-1, t=-100.):
-    x = x - np.max(x)
-
-    if np.min(x) < t:
-        x = x / np.min(x) * t
-
-    e_x = np.exp(x)
-
-    return e_x / e_x.sum(axis, keepdims=True)
-
-
-
+# def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
+#     """
+#     :param yolo_out: with shape [7, 7, 5, 7]
+#     :param anchors:
+#     :param nb_class:
+#     :param obj_thre:
+#     :param nms_thre:
+#     :return:
+#     """
+#     grid_h, grid_w, nb_box = yolo_out.shape[:3]
+#
+#     boxes = []
+#     fm_height = feature_map_shape[0]
+#     fm_width = feature_map_shape[1]
+#
+#     # decode the output by the network
+#     # yolo_out[..., 4] = _sigmoid(yolo_out[..., 4])  # sigmoid for confidence score to make it from 0 to 1
+#     # yolo_out[..., 5:] = yolo_out[..., 4][..., np.newaxis] * _softmax(yolo_out[..., 5:])  # softmax for class prob
+#     # yolo_out[..., 5:] *= yolo_out[..., 5:] > obj_thre  # select bbox with prob higher than threshold
+#
+#     yolo_out[..., 4] = tf.nn.sigmoid(yolo_out[..., 4])
+#     yolo_out[..., 5:] = yolo_out[..., 4][..., tf.newaxis] * tf.nn.softmax(yolo_out[..., 5:])
+#
+#     for row in range(grid_h):
+#         for col in range(grid_w):
+#             for b in range(nb_box):
+#                 # from 4th element onwards are confidence and class classes
+#                 classes = yolo_out[row, col, b, 5:]
+#
+#                 if np.sum(classes) > 0:
+#                     # first 4 elements are x, y, w, and h
+#                     x, y, w, h = yolo_out[row, col, b, :4]
+#
+#                     x = (col + _sigmoid(x)) / grid_w  # center position, unit: image width
+#                     y = (row + _sigmoid(y)) / grid_h  # center position, unit: image height
+#                     w = anchors[2 * b + 0] * np.exp(w) / grid_w  # unit: image width
+#                     h = anchors[2 * b + 1] * np.exp(h) / grid_h  # unit: image height
+#                     confidence = yolo_out[row, col, b, 4]
+#
+#                     # generate bbox on the 28x28 feature max
+#                     box = mutils.BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, confidence, classes)
+#                     xmin = min(int(box.xmin * fm_width), fm_height)
+#                     ymin = min(int(box.ymin * fm_height), fm_height)
+#                     xmax = min(int(box.xmax * fm_width), fm_width)
+#                     ymax = min(int(box.ymax * fm_height), fm_height)
+#
+#                     box = mutils.BoundBox(xmin, ymin, xmax, ymax, confidence, classes)
+#                     # box = BoundBox(x - w / 2, y - h / 2, x + w / 2, y + h / 2, confidence, classes)
+#                     boxes.append(box)  # xmin, ymin, xmax, ymax, confidence, classes
+#
+#     # suppress non-maximal boxes
+#     for c in range(nb_class):
+#         sorted_indices = list(reversed(np.argsort([box.classes[c] for box in boxes])))
+#
+#         for i in range(len(sorted_indices)):
+#             index_i = sorted_indices[i]
+#
+#             if boxes[index_i].classes[c] == 0:
+#                 continue
+#             else:
+#                 for j in range(i + 1, len(sorted_indices)):
+#                     index_j = sorted_indices[j]
+#
+#                     if mutils.bbox_iou(boxes[index_i], boxes[index_j]) >= nms_thre:
+#                         boxes[index_j].classes[c] = 0
+#
+#     # remove the boxes which are less likely than a obj_threshold
+#     # boxes = [box for box in boxes if box.get_score() > obj_thre]
+#
+#     return boxes
 
 

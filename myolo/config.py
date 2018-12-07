@@ -21,7 +21,7 @@ class Config(object):
     # Number of classification classes (including background)
     NUM_CLASSES = 1  # Override in sub-classes
     ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
-    N_BOX = 5
+    N_BOX = 3
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
     BATCH_SIZE = 8
@@ -228,7 +228,7 @@ class Config(object):
     def __init__(self):
         """Set values of computed attributes."""
         # Effective batch size
-        self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
+        # self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
 
         # Input image size
         if self.IMAGE_RESIZE_MODE == "crop":
