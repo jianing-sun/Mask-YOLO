@@ -3,6 +3,7 @@ import math
 from mrcnn import utils
 import random
 import logging
+from myolo.model import BoundBox, bbox_iou
 
 
 def compute_backbone_shapes(config, image_shape):
@@ -125,11 +126,7 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
     if use_mini_mask:
         mask = utils.minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
 
-    # Image meta data
-    image_meta = compose_image_meta(image_id, original_shape, image.shape,
-                                    window, scale, active_class_ids)
-
-    return image, image_meta, class_ids, bbox, mask
+    return image, class_ids, bbox, mask
 
 
 def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
@@ -203,12 +200,12 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
-                image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
+                image, gt_class_ids, gt_boxes, gt_masks = \
                 load_image_gt(dataset, config, image_id, augment=augment,
                               augmentation=None,
                               use_mini_mask=config.USE_MINI_MASK)
             else:
-                image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
+                image, gt_class_ids, gt_boxes, gt_masks = \
                     load_image_gt(dataset, config, image_id, augment=augment,
                                 augmentation=augmentation,
                                 use_mini_mask=config.USE_MINI_MASK)
@@ -226,6 +223,9 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # Mask R-CNN Targets
             # Init batch arrays
             if b == 0:
+                batch_yolo_target = np.zeros((batch_size, config.GRID_H, config.GRID_W,
+                                              config.N_BOX, 4 + 1 + config.NUM_CLASSES))
+                batch_yolo_true_boxes = np.zeros((batch_size, 1, 1, 1, config.MAX_GT_INSTANCES), 4)
                 batch_images = np.zeros(
                     (batch_size,) + image.shape, dtype=np.float32)
                 batch_gt_class_ids = np.zeros(
@@ -238,11 +238,64 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
 
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > config.MAX_GT_INSTANCES:
+                print('find instances more than 15 in an image')
                 ids = np.random.choice(
                     np.arange(gt_boxes.shape[0]), config.MAX_GT_INSTANCES, replace=False)
                 gt_class_ids = gt_class_ids[ids]
                 gt_boxes = gt_boxes[ids]
                 gt_masks = gt_masks[:, :, ids]
+
+            # YOLO
+            for i in range(0, gt_boxes.shape[0]):
+                # gt_boxes: [instance, (y1, x1, y2, x2)]
+                ymin = gt_boxes[i][0]
+                xmin = gt_boxes[i][1]
+                ymax = gt_boxes[i][2]
+                xmax = gt_boxes[i][3]
+
+                center_x = .5 * (xmin + xmax)
+                center_x = center_x / (float(config.IMAGE_SHAPE[0]) / config.GRID_W)
+                center_y = .5 * (ymin + ymax)
+                center_y = center_y / (float(config.IMAGE_SHAPE[1]) / config.GRID_H)
+
+                grid_x = int(np.floor(center_x))
+                grid_y = int(np.floor(center_y))
+
+                if grid_x < config.GRID_W and grid_y < config.GRID_H:
+                    obj_indx = gt_class_ids[i]
+
+                    center_w = (xmax - xmin) / (float(config.IMAGE_SHAPE[0]) / config.GRID_W)
+                    center_h = (ymax - ymin) / (float(config.IMAGE_SHAPE[1]) / config.GRID_H)
+
+                    yolo_box = [center_x, center_y, center_w, center_h]
+
+                    # find the anchor that best predicts this box
+                    best_anchor = -1
+                    max_iou = -1
+
+                    shifted_box = BoundBox(0,
+                                           0,
+                                           center_w,
+                                           center_h)
+
+                    for i in range(len(config.anchors)):
+                        anchor = config.anchors[i]
+                        iou = bbox_iou(shifted_box, anchor)
+
+                        if max_iou < iou:
+                            best_anchor = i
+                            max_iou = iou
+
+                    # assign ground truth x, y, w, h, confidence and class probs to y_batch
+                    batch_yolo_target[b, grid_y, grid_x, best_anchor, 0:4] = yolo_box
+                    batch_yolo_target[b, grid_y, grid_x, best_anchor, 4] = 1.
+                    batch_yolo_target[b, grid_y, grid_x, best_anchor, 5 + obj_indx] = 1
+
+                    # assign the true box to b_batch
+                    batch_yolo_true_boxes[b, 0, 0, 0, true_box_index] = yolo_box
+
+                    true_box_index += 1
+                    true_box_index = true_box_index % config.TRUE_BOX_BUFFER
 
             # Add to batch
             batch_images[b] = mold_image(image.astype(np.float32), config)
