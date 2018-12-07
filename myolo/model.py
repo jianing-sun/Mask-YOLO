@@ -464,31 +464,31 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
         proposals = tf.identity(proposals)
 
     # Remove zero padding
-    proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
-    gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
-    gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
-                                   name="trim_gt_class_ids")
-    gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
-                         name="trim_gt_masks")
+    # proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
+    # gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
+    # gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
+    #                                name="trim_gt_class_ids")
+    # gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
+    #                      name="trim_gt_masks")
 
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
     # them from training. A crowd box is given a negative class ID.
-    crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
-    non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
-    crowd_boxes = tf.gather(gt_boxes, crowd_ix)
-    crowd_masks = tf.gather(gt_masks, crowd_ix, axis=2)
-    gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
-    gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
-    gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
+    # crowd_ix = tf.where(gt_class_ids < 0)[:, 0]
+    # non_crowd_ix = tf.where(gt_class_ids > 0)[:, 0]
+    # crowd_boxes = tf.gather(gt_boxes, crowd_ix)
+    # crowd_masks = tf.gather(gt_masks, crowd_ix, axis=2)
+    # gt_class_ids = tf.gather(gt_class_ids, non_crowd_ix)
+    # gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
+    # gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
     overlaps = overlaps_graph(proposals, gt_boxes)
 
     # Compute overlaps with crowd boxes [proposals, crowd_boxes]
-    crowd_overlaps = overlaps_graph(proposals, crowd_boxes)
-    crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
-    no_crowd_bool = (crowd_iou_max < 0.001)
+    # crowd_overlaps = overlaps_graph(proposals, crowd_boxes)
+    # crowd_iou_max = tf.reduce_max(crowd_overlaps, axis=1)
+    # no_crowd_bool = (crowd_iou_max < 0.001)
 
     # Determine positive and negative ROIs
     roi_iou_max = tf.reduce_max(overlaps, axis=1)
@@ -496,18 +496,21 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     positive_roi_bool = (roi_iou_max >= 0.5)
     positive_indices = tf.where(positive_roi_bool)[:, 0]
     # 2. Negative ROIs are those with < 0.5 with every GT box. Skip crowds.
-    negative_indices = tf.where(tf.logical_and(roi_iou_max < 0.5, no_crowd_bool))[:, 0]
+    negative_indices = tf.where(roi_iou_max < 0.5)[:, 0]
 
     # Subsample ROIs. Aim for 33% positive
     # Positive ROIs
-    positive_count = int(config.TRAIN_ROIS_PER_IMAGE *
-                         config.ROI_POSITIVE_RATIO)
-    positive_indices = tf.random_shuffle(positive_indices)[:positive_count]
-    positive_count = tf.shape(positive_indices)[0]
+    # positive_count = int(config.TRAIN_ROIS_PER_IMAGE *
+    #                      config.ROI_POSITIVE_RATIO)
+    # positive_count = tf.shape(positive_indices)[0]
+    # positive_indices = tf.random_shuffle(positive_indices)[:positive_count]
+    # positive_count = tf.shape(positive_indices)[0]
+
     # Negative ROIs. Add enough to maintain positive:negative ratio.
-    r = 1.0 / config.ROI_POSITIVE_RATIO
-    negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
-    negative_indices = tf.random_shuffle(negative_indices)[:negative_count]
+    # r = 1.0 / config.ROI_POSITIVE_RATIO
+    # negative_count = tf.cast(r * tf.cast(positive_count, tf.float32), tf.int32) - positive_count
+    # negative_indices = tf.random_shuffle(negative_indices)[:negative_count]
+
     # Gather selected ROIs
     positive_rois = tf.gather(proposals, positive_indices)
     negative_rois = tf.gather(proposals, negative_indices)
@@ -791,13 +794,13 @@ class MaskYOLO():
         yolo_model = build_yolo_model(input_true_boxes, config, config.TOP_FEATURE_MAP_DEPTH)
         yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
-        # TODO: decode yolo network output to anchors with the size of feature map
         feature_map_shape = [(config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0],
                              (config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0]]
         yolo_rois = []
         for i in range(0, config.BATCH_SIZE):
             yolo_rois.append([])
-            boxes = decode_yolo4one(yolo_output[0], config.ANCHORS, config.NUM_CLASSES, feature_map_shape)
+            boxes = decode_yolo4one(yolo_output[0], config.ANCHORS,
+                                    config.NUM_CLASSES, feature_map_shape)
             for box in boxes:
                 yolo_rois[i].append([box.ymin, box.xmin, box.ymax, box.ymin])
 
@@ -824,6 +827,8 @@ class MaskYOLO():
         outputs = [output_rois, myolo_mask, yolo_sum_loss, mask_loss]
 
         model = KM.Model(inputs, outputs, name="mask_yolo")
+
+        return model
 
 
 def compute_backbone_shapes(config, image_shape):
@@ -932,9 +937,9 @@ def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3
     fm_width = int(feature_map_shape[1])
 
     # decode the output by the network
-    yolo_out[..., 4] = _sigmoid(yolo_out[..., 4])  # sigmoid for bx, by, bw, bh and c
+    yolo_out[..., 4] = _sigmoid(yolo_out[..., 4])  # sigmoid for confidence score to make it from 0 to 1
     yolo_out[..., 5:] = yolo_out[..., 4][..., np.newaxis] * _softmax(yolo_out[..., 5:])  # softmax for class prob
-    yolo_out[..., 5:] *= yolo_out[..., 5:] > obj_thre  # select bbox with prob higher than threshold
+    # yolo_out[..., 5:] *= yolo_out[..., 5:] > obj_thre  # select bbox with prob higher than threshold
 
     for row in range(grid_h):
         for col in range(grid_w):
@@ -980,7 +985,7 @@ def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3
                         boxes[index_j].classes[c] = 0
 
     # remove the boxes which are less likely than a obj_threshold
-    boxes = [box for box in boxes if box.get_score() > obj_thre]
+    # boxes = [box for box in boxes if box.get_score() > obj_thre]
 
     return boxes
 
