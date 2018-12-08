@@ -84,7 +84,7 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
         tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
     cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
 
-    cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, 5, 1])
+    cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
 
     coord_mask = tf.zeros(mask_shape)
     conf_mask = tf.zeros(mask_shape)
@@ -224,14 +224,14 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     current_recall = nb_pred_box / (nb_true_box + 1e-6)
     total_recall = tf.assign_add(total_recall, current_recall)
 
-    loss = tf.Print(loss, [tf.zeros((1))], message='Dummy Line \t', summarize=1000)
-    loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
-    loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
-    loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
-    loss = tf.Print(loss, [loss_class], message='Loss Class \t', summarize=1000)
-    loss = tf.Print(loss, [loss], message='Total Loss \t', summarize=1000)
-    loss = tf.Print(loss, [current_recall], message='Current Recall \t', summarize=1000)
-    loss = tf.Print(loss, [total_recall / seen], message='Average Recall \t', summarize=1000)
+    # loss = tf.Print(loss, [tf.zeros((1))], message='Dummy Line \t', summarize=1000)
+    # loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
+    # loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
+    # loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
+    # loss = tf.Print(loss, [loss_class], message='Loss Class \t', summarize=1000)
+    # loss = tf.Print(loss, [loss], message='Total Loss \t', summarize=1000)
+    # loss = tf.Print(loss, [current_recall], message='Current Recall \t', summarize=1000)
+    # loss = tf.Print(loss, [total_recall / seen], message='Average Recall \t', summarize=1000)
 
     return loss
 
@@ -258,8 +258,8 @@ def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
     x = _depthwise_conv_block(x, 1024, alpha, depth_multiplier, block_id=14)
 
     # yolo output
-    x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1), padding='same', name='conv_23')(
-        x)
+    x = KL.Conv2D(config.N_BOX * (4 + 1 + config.NUM_CLASSES), (1, 1), strides=(1, 1),
+                  padding='same', name='conv_23')(x)
     output = KL.Reshape((config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES))(x)
 
     # small hack to allow true_boxes to be registered when Keras build the model
@@ -268,17 +268,17 @@ def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
     return output
 
 
-def build_yolo_model(ture_boxes, config, depth):
+def build_yolo_model(config, depth):
     """ Build a keras model for the YOLO model
     :param depth: depth of input feature map, for now is 512
     :return: a keras model object, the last layer of the model is a standard YOLOv2 output
     with shape [None, GRID_H, GRID_W, N_BOX, 5 + NUM_CLASSES]
     """
     input_feature_map = KL.Input(shape=[None, None, depth], name="input_yolo_feature_map")
-    # input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
-    output = yolo_branch_graph(input_feature_map, ture_boxes, config)
+    input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
+    output = yolo_branch_graph(input_feature_map, input_true_boxes, config)
 
-    return KM.Model([input_feature_map, ture_boxes], output, name="yolo_model")
+    return KM.Model([input_feature_map, input_true_boxes], output, name="yolo_model")
 
 
 ############################################################
@@ -768,7 +768,7 @@ class MaskYOLO():
             # input_yolo_anchors and true_boxes
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
             input_yolo_target = KL.Input(
-                shape=[None, config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
+                shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
                 name="input_yolo_target", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
@@ -798,13 +798,15 @@ class MaskYOLO():
         myolo_feature_maps = C4 = mobilenet_graph(input_image, config.BACKBONE, stage5=False)
 
         # build YOLO branch graph
-        yolo_model = build_yolo_model(input_true_boxes, config, config.TOP_FEATURE_MAP_DEPTH)
+        yolo_model = build_yolo_model(config, config.TOP_FEATURE_MAP_DEPTH)
         yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
         feature_map_shape = [int((config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0]),
                              int((config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0])]
 
-        yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
+        # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
+        yolo_rois = DecodeYOLOLayer(feature_map_shape=feature_map_shape,
+                                    config=config)([yolo_output])
 
         rois, target_class_ids, target_bbox, target_mask = \
             DetectionTargetLayer(config, name="proposal_targets")([
@@ -825,7 +827,7 @@ class MaskYOLO():
 
         # Model
         inputs = [input_image, input_true_boxes, input_yolo_target,
-                  input_gt_class_ids, gt_boxes, input_gt_masks]
+                  input_gt_class_ids, input_gt_boxes, input_gt_masks]
 
         outputs = [output_rois, myolo_mask, yolo_sum_loss, mask_loss]
 
@@ -959,37 +961,47 @@ def norm_boxes_graph(boxes, shape):
 ############################################################
 
 
-def batch_yolo_decode(y_pred, feature_map_shape, config):
-    mask_shape = tf.shape(y_pred)[:4]
+class DecodeYOLOLayer(KE.Layer):
+    def __init__(self, feature_map_shape, config, **kwargs):
+        super(DecodeYOLOLayer, self).__init__(**kwargs)
+        self.feature_map_shape = feature_map_shape
+        self.config = config
 
-    cell_x = tf.to_float(
-        tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
-    cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
+    def call(self, inputs):
+        y_pred = inputs[0]
+        mask_shape = tf.shape(y_pred)[:4]
 
-    cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
+        cell_x = tf.to_float(
+            tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
+        cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
 
-    """ Adjust prediction """
-    ### adjust x and y
-    pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
+        cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
 
-    ### adjust w and h
-    pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
+        """ Adjust prediction """
+        ### adjust x and y
+        pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
 
-    """ get x, y coordinates """
-    # pred_xy = tf.expand_dims(pred_box_xy, 4)
-    # pred_wh = tf.expand_dims(pred_box_wh, 4)
+        ### adjust w and h
+        pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
 
-    pred_wh_half = pred_box_wh / 2.
-    pred_mins = pred_box_xy - pred_wh_half
-    pred_maxes = pred_box_xy + pred_wh_half
+        """ get x, y coordinates """
+        # pred_xy = tf.expand_dims(pred_box_xy, 4)
+        # pred_wh = tf.expand_dims(pred_box_wh, 4)
 
-    # xmin, ymin, xmax, ymax
-    output_boxes = tf.concat([pred_mins * feature_map_shape[0], pred_maxes * feature_map_shape[1]], axis=-1)
-    output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
-                                             output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
-                                             output_boxes.shape[-1]])
+        pred_wh_half = pred_box_wh / 2.
+        pred_mins = pred_box_xy - pred_wh_half
+        pred_maxes = pred_box_xy + pred_wh_half
 
-    return output_boxes
+        # xmin, ymin, xmax, ymax
+        output_boxes = tf.concat([pred_mins * self.feature_map_shape[0], pred_maxes * self.feature_map_shape[1]], axis=-1)
+        output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
+                                                 output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
+                                                 output_boxes.shape[-1]])
+
+        return output_boxes
+
+    def compute_output_shape(self, input_shape):
+        return (None, 147, 4)
 
 
 # def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
