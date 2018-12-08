@@ -9,6 +9,7 @@ import keras.engine as KE
 import keras.layers as KL
 import keras.models as KM
 import numpy as np
+import re
 import tensorflow as tf
 # used for buliding mobilenet backbone
 from keras_applications import get_keras_submodule
@@ -750,6 +751,7 @@ class MaskYOLO():
         self.config = config
         self.model_dir = model_dir
         self.keras_model = self.build(mode=mode, config=config)
+        self.epoch = 0
 
     def build(self, mode, config):
         assert mode in ['training', 'inference']
@@ -762,7 +764,7 @@ class MaskYOLO():
         #                     "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
         # Inputs
-        input_image = KL.Input(shape=[224, 224, config.IMAGE_SHAPE[2]], name="input_image")
+        input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
@@ -817,7 +819,6 @@ class MaskYOLO():
                                       config.NUM_CLASSES)
         output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(yolo_rois)
 
-        # TODO: Losses
         # 1. YOLO custom loss (bbox loss and binary classification loss)
         yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
             [input_yolo_target, yolo_output, input_true_boxes])
@@ -898,12 +899,10 @@ class MaskYOLO():
         #     os.makedirs(self.log_dir)
 
         # Callbacks
-        # callbacks = [
-        #     keras.callbacks.TensorBoard(log_dir=self.log_dir,
-        #                                 histogram_freq=0, write_graph=True, write_images=False),
-        #     keras.callbacks.ModelCheckpoint(self.checkpoint_path,
-        #                                     verbose=0, save_weights_only=True),
-        # ]
+        callbacks = [
+            keras.callbacks.TensorBoard(log_dir='./', histogram_freq=0, write_graph=True, write_images=False),
+            keras.callbacks.ModelCheckpoint('./', verbose=0, save_weights_only=True),
+        ]
 
         # Add custom callbacks to the list
         # if custom_callbacks:
@@ -936,6 +935,89 @@ class MaskYOLO():
             use_multiprocessing=True,
         )
         self.epoch = max(self.epoch, epochs)
+
+    def compile(self, learning_rate, momentum):
+        """Gets the model ready for training. Adds losses, regularization, and
+        metrics. Then calls the Keras compile() function.
+        """
+        # Optimizer object
+        optimizer = keras.optimizers.SGD(
+            lr=learning_rate, momentum=momentum,
+            clipnorm=self.config.GRADIENT_CLIP_NORM)
+        # Add Losses
+        # First, clear previously set losses to avoid duplication
+        self.keras_model._losses = []
+        self.keras_model._per_input_losses = {}
+        loss_names = ["yolo_sum_loss",  "mrcnn_mask_loss"]
+        for name in loss_names:
+            layer = self.keras_model.get_layer(name)
+            if layer.output in self.keras_model.losses:
+                continue
+            loss = (
+                tf.reduce_mean(layer.output, keepdims=True)
+                * self.config.LOSS_WEIGHTS.get(name, 1.))
+            self.keras_model.add_loss(loss)
+
+        # Add L2 Regularization
+        # Skip gamma and beta weights of batch normalization layers.
+        reg_losses = [
+            keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+            for w in self.keras_model.trainable_weights
+            if 'gamma' not in w.name and 'beta' not in w.name]
+        self.keras_model.add_loss(tf.add_n(reg_losses))
+
+        # Compile
+        self.keras_model.compile(
+            optimizer=optimizer,
+            loss=[None] * len(self.keras_model.outputs))
+
+        # Add metrics for losses
+        for name in loss_names:
+            if name in self.keras_model.metrics_names:
+                continue
+            layer = self.keras_model.get_layer(name)
+            self.keras_model.metrics_names.append(name)
+            loss = (
+                tf.reduce_mean(layer.output, keepdims=True)
+                * self.config.LOSS_WEIGHTS.get(name, 1.))
+            self.keras_model.metrics_tensors.append(loss)
+
+    def set_trainable(self, layer_regex, keras_model=None, indent=0, verbose=1):
+        """Sets model layers as trainable if their names match
+        the given regular expression.
+        """
+        # Print message on the first call (but not on recursive calls)
+        # if verbose > 0 and keras_model is None:
+        #     log("Selecting layers to train")
+
+        keras_model = keras_model or self.keras_model
+
+        # In multi-GPU training, we wrap the model. Get layers
+        # of the inner model because they have the weights.
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
+            else keras_model.layers
+
+        for layer in layers:
+            # Is the layer a model?
+            if layer.__class__.__name__ == 'Model':
+                print("In model: ", layer.name)
+                self.set_trainable(
+                    layer_regex, keras_model=layer, indent=indent + 4)
+                continue
+
+            if not layer.weights:
+                continue
+            # Is it trainable?
+            trainable = bool(re.fullmatch(layer_regex, layer.name))
+            # Update layer. If layer is a container, update inner layer.
+            if layer.__class__.__name__ == 'TimeDistributed':
+                layer.layer.trainable = trainable
+            else:
+                layer.trainable = trainable
+            # Print trainable layer names
+            # if trainable and verbose > 0:
+            #     log("{}{:20}   ({})".format(" " * indent, layer.name,
+            #                                 layer.__class__.__name__))
 
 
 def norm_boxes_graph(boxes, shape):
