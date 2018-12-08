@@ -8,6 +8,7 @@ from mrcnn import visualize
 
 from myolo.config import Config
 from myolo import model as modellib
+from myolo.myolo_utils import extract_bboxes
 
 
 class ShapesConfig(Config):
@@ -36,7 +37,7 @@ class ShapesConfig(Config):
     ANCHORS = [1.91, 1.61, 5.04, 4.38, 6.67, 4.90]
     # Reduce training ROIs per image because the images are small and have
     # few objects. Aim to allow ROI sampling to pick 33% positive ROIs.
-    TRAIN_ROIS_PER_IMAGE = 63  # 7x7x3
+    TRAIN_ROIS_PER_IMAGE = 147  # 7x7x3
 
     # Use a small epoch since the data is simple
     STEPS_PER_EPOCH = 100
@@ -191,6 +192,7 @@ if __name__ == '__main__':
     for image_id in image_ids:
         image = dataset_train.load_image(image_id)
         mask, class_ids = dataset_train.load_mask(image_id)
-        visualize.display_top_masks(image, mask, class_ids, dataset_train.class_names)
+        # visualize.display_top_masks(image, mask, class_ids, dataset_train.class_names)
+        box = extract_bboxes(mask)
 
     model = modellib.MaskYOLO(mode="training", config=config)

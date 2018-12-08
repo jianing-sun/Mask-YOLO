@@ -297,7 +297,7 @@ class PyramidROIAlign(KE.Layer):
     - pool_shape: [pool_height, pool_width] of the output pooled regions. Usually [7, 7]
 
     Inputs:
-    - boxes: [batch, num_boxes, (y1, x1, y2, x2)] in normalized
+    - boxes: [batch, num_boxes, (xmin, ymin, xmax, ymax)] in normalized
              coordinates. Possibly padded with zeros if not enough
              boxes to fill the array.
     - image_meta: [batch, (meta data)] Image details. See compose_image_meta()
@@ -315,7 +315,7 @@ class PyramidROIAlign(KE.Layer):
         self.pool_shape = tuple(pool_shape)
 
     def call(self, inputs):
-        # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
+        # Crop boxes [batch, num_boxes, (xmin, ymin, xmax, ymax)] in normalized coords
         boxes = inputs[0]
 
         # Image meta
@@ -327,25 +327,29 @@ class PyramidROIAlign(KE.Layer):
         feature_maps = inputs[1:]
 
         # Assign each ROI to a level in the pyramid based on the ROI area.
-        y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
+        x1, y1, x2, y2 = tf.split(boxes, 4, axis=2)
         h = y2 - y1
         w = x2 - x1
         # Use shape of first image. Images in a batch must have the same size.
         # image_shape = parse_image_meta_graph(image_meta)['image_shape'][0]
-        image_shape = [224, 224, 3]
+        image_shape = [224, 224]
         # Equation 1 in the Feature Pyramid Networks paper. Account for
         # the fact that our coordinates are normalized here.
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
         roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
-        roi_level = tf.minimum(5, tf.maximum(
-            2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
+        # roi_level = tf.minimum(5, tf.maximum(
+        #     2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
+        roi_level = tf.minimum(0, tf.maximum(
+            0, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
+
+        new_roi_level = tf.cast(5, tf.int8)
 
         # Loop through levels and apply ROI pooling to each. P2 to P5.
         pooled = []
         box_to_level = []
-        for i, level in enumerate(range(2, 6)):
+        for i, level in enumerate(range(0, 1)):
             ix = tf.where(tf.equal(roi_level, level))
             level_boxes = tf.gather_nd(boxes, ix)
 
@@ -397,7 +401,7 @@ class PyramidROIAlign(KE.Layer):
         return pooled
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1],)
+        return input_shape[0][:2] + self.pool_shape + (input_shape[1][-1],)
 
 
 ############################################################
@@ -438,15 +442,15 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     generates target class IDs, bounding box deltas, and masks for each.
 
     Inputs:
-    proposals: [POST_NMS_ROIS_TRAINING, (y1, x1, y2, x2)] in normalized coordinates. Might
+    proposals: [7x7x3, (xmin, ymin, xmax, ymax)] in normalized coordinates. Might
                be zero padded if there are not enough proposals.
-    gt_class_ids: [MAX_GT_INSTANCES] int class IDs
-    gt_boxes: [MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized coordinates.
+    gt_class_ids: [TRUE_BOX_BUFFER] int class IDs
+    gt_boxes: [TRUE_BOX_BUFFER, (xmin, ymin, xmax, ymax)] in normalized coordinates.
     gt_masks: [height, width, MAX_GT_INSTANCES] of boolean type.
 
     Returns: Target ROIs and corresponding class IDs, bounding box shifts,
     and masks.
-    rois: [TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized coordinates
+    rois: [TRAIN_ROIS_PER_IMAGE, (xmin, ymin, xmax, ymax)] in normalized coordinates
     class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs. Zero padded.
     deltas: [TRAIN_ROIS_PER_IMAGE, (dy, dx, log(dh), log(dw))]
     masks: [TRAIN_ROIS_PER_IMAGE, height, width]. Masks cropped to bbox
@@ -492,7 +496,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Determine positive and negative ROIs
     roi_iou_max = tf.reduce_max(overlaps, axis=1)
     # 1. Positive ROIs are those with >= 0.5 IoU with a GT box
-    positive_roi_bool = (roi_iou_max >= 0.5)
+    positive_roi_bool = (roi_iou_max >= 0.5)                # TODO
     positive_indices = tf.where(positive_roi_bool)[:, 0]
     # 2. Negative ROIs are those with < 0.5 with every GT box. Skip crowds.
     negative_indices = tf.where(roi_iou_max < 0.5)[:, 0]
@@ -636,11 +640,11 @@ class DetectionTargetLayer(KE.Layer):
 ############################################################
 
 
-def build_fpn_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=True):
+def build_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=False):
     """Builds the computation graph of the mask head of Feature Pyramid Network.
 
-    rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
-          coordinates. Note in my case is [batch, num_rois, (x1, y1, x2, y2)]
+    rois: [batch, num_rois, (xmin, ymin, xmax, ymax)] Proposal boxes in normalized
+          coordinates.
     feature_maps: List of feature maps from different layers of the pyramid,
                   [P2, P3, P4, P5]. Each has a different resolution.
     image_meta: [batch, (meta data)] Image details. See compose_image_meta()
@@ -653,33 +657,33 @@ def build_fpn_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=Tr
     # ROI Pooling
     # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
     x = PyramidROIAlign([pool_size, pool_size],
-                        name="roi_align_mask")([rois] + feature_maps)
+                        name="roi_align_mask")([rois] + feature_maps)  # [8, ?, 14, 14, 512]
 
     # Conv layers
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="mrcnn_mask_conv1")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(), name='mrcnn_mask_bn1')(x)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="mrcnn_mask_conv2")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='mrcnn_mask_bn2')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="mrcnn_mask_conv3")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='mrcnn_mask_bn3')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="mrcnn_mask_conv4")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='mrcnn_mask_bn4')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"),
+    x = KL.TimeDistributed(KL.Conv2DTranspose(512, (2, 2), strides=2, activation="relu"),
                            name="mrcnn_mask_deconv")(x)
     x = KL.TimeDistributed(KL.Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"),
                            name="mrcnn_mask")(x)
@@ -806,9 +810,9 @@ class MaskYOLO():
             DetectionTargetLayer(config, name="proposal_targets")([
                 yolo_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
-        myolo_mask = build_fpn_mask_graph(yolo_rois, myolo_feature_maps,
-                                          config.MASK_POOL_SIZE,
-                                          config.NUM_CLASSES)
+        myolo_mask = build_mask_graph(rois, [myolo_feature_maps],
+                                      config.MASK_POOL_SIZE,
+                                      config.NUM_CLASSES)
         output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(yolo_rois)
 
         # TODO: Losses
