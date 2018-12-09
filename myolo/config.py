@@ -21,7 +21,9 @@ class Config(object):
     # Number of classification classes (including background)
     NUM_CLASSES = 1 + 3     # Override in sub-classes
     # ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
-    ANCHORS = [1.91, 1.61, 5.04, 4.38, 6.67, 4.90]
+    # ANCHORS = [1.91, 1.61, 5.04, 4.38, 6.67, 4.90]
+    # ANCHORS = [0.57273, 0.677385, 3.33843, 5.47434, 9.77052, 9.16828]
+    ANCHORS = [0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434]
 
     N_BOX = 3
     GRID_H, GRID_W = 7, 7

@@ -4,6 +4,8 @@ from mrcnn import utils
 import random
 import logging
 import tensorflow as tf
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 
 def box_refinement_graph(box, gt_box):
@@ -286,6 +288,9 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
     error_count = 0
     no_augmentation_sources = no_augmentation_sources or []
 
+    anchors = [BoundBox(0, 0, config.ANCHORS[2 * i], config.ANCHORS[2 * i + 1]) for i in
+                range(int(len(config.ANCHORS) // 2))]
+
     # Anchors
     # [anchor_count, (y1, x1, y2, x2)]
     # backbone_shapes = compute_backbone_shapes(config, config.IMAGE_SHAPE)
@@ -317,6 +322,16 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                     load_image_gt(dataset, config, image_id, augment=augment,
                                 augmentation=augmentation,
                                 use_mini_mask=config.USE_MINI_MASK)
+
+            # used for debug
+            # fig, ax = plt.subplots(nrows=1, ncols=1)
+            # print(gt_boxes)
+            # ax.imshow(image[:, :, ::-1])
+            # for i in range(0, len(gt_boxes)):
+            #     ax.add_patch(Rectangle((gt_boxes[i][0], gt_boxes[i][1]), gt_boxes[i][2] - gt_boxes[i][0],
+            #                            gt_boxes[i][3] - gt_boxes[i][1],
+            #                            facecolor='none', edgecolor='#FF0000', linewidth=3.0))
+            # plt.show()
 
             # Skip images that have no instances. This can happen in cases
             # where we train on a subset of classes and the image doesn't
@@ -350,12 +365,13 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                 gt_masks = gt_masks[:, :, ids]
 
             # YOLO
+            true_box_index = 0
             for i in range(0, gt_boxes.shape[0]):
                 # gt_boxes: [instance, (y1, x1, y2, x2)]
-                ymin = gt_boxes[i][0]
-                xmin = gt_boxes[i][1]
-                ymax = gt_boxes[i][2]
-                xmax = gt_boxes[i][3]
+                xmin = gt_boxes[i][0]
+                ymin = gt_boxes[i][1]
+                xmax = gt_boxes[i][2]
+                ymax = gt_boxes[i][3]
 
                 center_x = .5 * (xmin + xmax)
                 center_x = center_x / (float(config.IMAGE_SHAPE[0]) / config.GRID_W)
@@ -382,8 +398,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                                            center_w,
                                            center_h)
 
-                    for i in range(len(config.anchors)):
-                        anchor = config.anchors[i]
+                    for i in range(len(anchors)):
+                        anchor = anchors[i]
                         iou = bbox_iou(shifted_box, anchor)
 
                         if max_iou < iou:
