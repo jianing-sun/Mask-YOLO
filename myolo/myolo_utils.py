@@ -3,7 +3,33 @@ import math
 from mrcnn import utils
 import random
 import logging
+import tensorflow as tf
 
+
+def box_refinement_graph(box, gt_box):
+    """Compute refinement needed to transform box to gt_box.
+    box and gt_box are [N, (y1, x1, y2, x2)]
+    """
+    box = tf.cast(box, tf.float32)
+    gt_box = tf.cast(gt_box, tf.float32)
+
+    width = box[:, 2] - box[:, 0]
+    height = box[:, 3] - box[:, 1]
+    center_x = box[:, 0] + 0.5 * width
+    center_y = box[:, 1] + 0.5 * height
+
+    gt_width = gt_box[:, 2] - gt_box[:, 0]
+    gt_height = gt_box[:, 3] - gt_box[:, 1]
+    gt_center_x = gt_box[:, 0] + 0.5 * gt_width
+    gt_center_y = gt_box[:, 1] + 0.5 * gt_height
+
+    dy = (gt_center_y - center_y) / height
+    dx = (gt_center_x - center_x) / width
+    dh = tf.log(gt_height / height)
+    dw = tf.log(gt_width / width)
+
+    result = tf.stack([dy, dx, dh, dw], axis=1)
+    return result
 
 
 def compute_backbone_shapes(config, image_shape):
@@ -308,15 +334,11 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                 batch_yolo_target = np.zeros((batch_size, config.GRID_H, config.GRID_W,
                                               config.N_BOX, 4 + 1 + config.NUM_CLASSES))
                 batch_yolo_true_boxes = np.zeros((batch_size, 1, 1, 1, config.MAX_GT_INSTANCES), 4)
-                batch_images = np.zeros(
-                    (batch_size,) + image.shape, dtype=np.float32)
-                batch_gt_class_ids = np.zeros(
-                    (batch_size, config.MAX_GT_INSTANCES), dtype=np.int32)
-                batch_gt_boxes = np.zeros(
-                    (batch_size, config.MAX_GT_INSTANCES, 4), dtype=np.int32)
-                batch_gt_masks = np.zeros(
-                    (batch_size, gt_masks.shape[0], gt_masks.shape[1],
-                     config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
+                batch_images = np.zeros((batch_size,) + image.shape, dtype=np.float32)
+                batch_gt_class_ids = np.zeros((batch_size, config.MAX_GT_INSTANCES), dtype=np.int32)
+                batch_gt_boxes = np.zeros((batch_size, config.MAX_GT_INSTANCES, 4), dtype=np.int32)
+                batch_gt_masks = np.zeros((batch_size, gt_masks.shape[0], gt_masks.shape[1],
+                                           config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
 
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > config.MAX_GT_INSTANCES:

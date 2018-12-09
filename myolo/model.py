@@ -411,7 +411,7 @@ class PyramidROIAlign(KE.Layer):
 
 def overlaps_graph(boxes1, boxes2):
     """Computes IoU overlaps between two sets of boxes.
-    boxes1, boxes2: [N, (y1, x1, y2, x2)].
+    boxes1, boxes2: [N, (x1, y1, x2, y2)].
     """
     # 1. Tile boxes2 and repeat boxes1. This allows us to compare
     # every boxes1 against every boxes2 without loops.
@@ -420,25 +420,31 @@ def overlaps_graph(boxes1, boxes2):
     b1 = tf.reshape(tf.tile(tf.expand_dims(boxes1, 1),
                             [1, 1, tf.shape(boxes2)[0]]), [-1, 4])
     b2 = tf.tile(boxes2, [tf.shape(boxes1)[0], 1])
+
     # 2. Compute intersections
-    b1_y1, b1_x1, b1_y2, b1_x2 = tf.split(b1, 4, axis=1)
-    b2_y1, b2_x1, b2_y2, b2_x2 = tf.split(b2, 4, axis=1)
-    y1 = tf.maximum(b1_y1, b2_y1)
+    b1_x1, b1_y1, b1_x2, b1_y2 = tf.split(b1, 4, axis=1)
+    b2_x1, b2_y1, b2_x2, b2_y2 = tf.split(b2, 4, axis=1)
+
     x1 = tf.maximum(b1_x1, b2_x1)
-    y2 = tf.minimum(b1_y2, b2_y2)
+    y1 = tf.maximum(b1_y1, b2_y1)
     x2 = tf.minimum(b1_x2, b2_x2)
+    y2 = tf.minimum(b1_y2, b2_y2)
+
     intersection = tf.maximum(x2 - x1, 0) * tf.maximum(y2 - y1, 0)
+
     # 3. Compute unions
     b1_area = (b1_y2 - b1_y1) * (b1_x2 - b1_x1)
     b2_area = (b2_y2 - b2_y1) * (b2_x2 - b2_x1)
     union = b1_area + b2_area - intersection
+
     # 4. Compute IoU and reshape to [boxes1, boxes2]
     iou = intersection / union
     overlaps = tf.reshape(iou, [tf.shape(boxes1)[0], tf.shape(boxes2)[0]])
+
     return overlaps
 
 
-def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
+def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
@@ -453,7 +459,7 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     and masks.
     rois: [TRAIN_ROIS_PER_IMAGE, (xmin, ymin, xmax, ymax)] in normalized coordinates
     class_ids: [TRAIN_ROIS_PER_IMAGE]. Integer class IDs. Zero padded.
-    deltas: [TRAIN_ROIS_PER_IMAGE, (dy, dx, log(dh), log(dw))]
+    # deltas: [TRAIN_ROIS_PER_IMAGE, (dy, dx, log(dh), log(dw))]
     masks: [TRAIN_ROIS_PER_IMAGE, height, width]. Masks cropped to bbox
            boundaries and resized to neural network output size.
 
@@ -530,8 +536,8 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
 
     # Compute bbox refinement for positive ROIs
-    deltas = utils.box_refinement_graph(positive_rois, roi_gt_boxes)
-    deltas /= config.BBOX_STD_DEV
+    # deltas = mutils.box_refinement_graph(positive_rois, roi_gt_boxes)
+    # deltas /= config.BBOX_STD_DEV
 
     # Assign positive ROIs to GT masks
     # Permute masks to [N, height, width, 1]
@@ -544,15 +550,17 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     if config.USE_MINI_MASK:
         # Transform ROI coordinates from normalized image space
         # to normalized mini-mask space.
-        y1, x1, y2, x2 = tf.split(positive_rois, 4, axis=1)
-        gt_y1, gt_x1, gt_y2, gt_x2 = tf.split(roi_gt_boxes, 4, axis=1)
-        gt_h = gt_y2 - gt_y1
+        x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
+        gt_x1, gt_y1, gt_x2, gt_y2 = tf.split(roi_gt_boxes, 4, axis=1)
         gt_w = gt_x2 - gt_x1
-        y1 = (y1 - gt_y1) / gt_h
+        gt_h = gt_y2 - gt_y1
+
         x1 = (x1 - gt_x1) / gt_w
-        y2 = (y2 - gt_y1) / gt_h
+        y1 = (y1 - gt_y1) / gt_h
         x2 = (x2 - gt_x1) / gt_w
-        boxes = tf.concat([y1, x1, y2, x2], 1)
+        y2 = (y2 - gt_y1) / gt_h
+
+        boxes = tf.concat([x1, y1, x2, y2], 1)
     box_ids = tf.range(0, tf.shape(roi_masks)[0])
     masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
                                      box_ids,
@@ -567,36 +575,36 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
     # Append negative ROIs and pad bbox deltas and masks that
     # are not used for negative ROIs with zeros.
     rois = tf.concat([positive_rois, negative_rois], axis=0)
-    N = tf.shape(negative_rois)[0]
-    P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - tf.shape(rois)[0], 0)
-    rois = tf.pad(rois, [(0, P), (0, 0)])
-    roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
-    roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])
-    deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
-    masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
+    # N = tf.shape(negative_rois)[0]
+    # P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - tf.shape(rois)[0], 0)
+    # rois = tf.pad(rois, [(0, P), (0, 0)])
+    # roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
+    # roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])
+    # deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
+    # masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
 
-    return rois, roi_gt_class_ids, deltas, masks
+    return rois, roi_gt_class_ids, masks
 
 
-class DetectionTargetLayer(KE.Layer):
-    """Subsamples proposals and generates target box refinement, class_ids,
-    and masks for each.
+class DetectMaskTargetLayer(KE.Layer):
+    """ Assign targets (target_class_id, target_deltas, target_mask)
+    to yolo_rois
 
     Inputs:
-    proposals: [batch, N, (y1, x1, y2, x2)] in normalized coordinates. Might
-               be zero padded if there are not enough proposals.
+    yolo_rois: [batch, N, (x1, y1, x2, y2)] in normalized coordinates.
+                No zero padding
     gt_class_ids: [batch, MAX_GT_INSTANCES] Integer class IDs.
-    gt_boxes: [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in normalized
+    gt_boxes: [batch, MAX_GT_INSTANCES, (x1, y1, x2, y2)] in normalized
               coordinates.
     gt_masks: [batch, height, width, MAX_GT_INSTANCES] of boolean type
 
     Returns: Target ROIs and corresponding class IDs, bounding box shifts,
     and masks.
-    rois: [batch, TRAIN_ROIS_PER_IMAGE, (y1, x1, y2, x2)] in normalized
-          coordinates
-    target_class_ids: [batch, TRAIN_ROIS_PER_IMAGE]. Integer class IDs.
-    target_deltas: [batch, TRAIN_ROIS_PER_IMAGE, (dy, dx, log(dh), log(dw)]
-    target_mask: [batch, TRAIN_ROIS_PER_IMAGE, height, width]
+    rois: [batch, N, (x1, y1, x2, y2)] in normalized coordinates
+    target_class_ids: [batch, N]. Integer class IDs.
+    # target_deltas: [batch, N, (dy, dx, log(dh), log(dw)] used to compute
+    box loss in Mask-RCNN but here it's been included in YOLO loss
+    target_mask: [batch, N, height, width]
                  Masks cropped to bbox boundaries and resized to neural
                  network output size.
 
@@ -604,7 +612,7 @@ class DetectionTargetLayer(KE.Layer):
     """
 
     def __init__(self, config, **kwargs):
-        super(DetectionTargetLayer, self).__init__(**kwargs)
+        super(DetectMaskTargetLayer, self).__init__(**kwargs)
         self.config = config
 
     def call(self, inputs):
@@ -615,12 +623,12 @@ class DetectionTargetLayer(KE.Layer):
 
         # Slice the batch and run a graph for each slice
         # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
+        names = ["yolo_rois", "target_class_ids", "target_bbox", "target_mask"]
         outputs = utils.batch_slice(
             [proposals, gt_class_ids, gt_boxes, gt_masks],
-            lambda w, x, y, z: detection_targets_graph(
+            lambda w, x, y, z: detect_mask_target_graph(
                 w, x, y, z, self.config),
-            self.config.IMAGES_PER_GPU, names=names)
+            self.config.BATCH_SIZE, names=names)
         return outputs
 
     def compute_output_shape(self, input_shape):
@@ -737,7 +745,8 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 
 class MaskYOLO():
     """ Build the overall structure of MaskYOLO class
-    which only generate bbox and mask, no classification involved
+    which generate bbox and class label on the YOLO side based on that then added with a Mask branch
+    Note to myself: all the operations have to be built with Tensor and Layer so as to generate TF Graph
     """
 
     def __init__(self, mode, config, model_dir=None):
@@ -756,19 +765,19 @@ class MaskYOLO():
     def build(self, mode, config):
         assert mode in ['training', 'inference']
 
-        # Image size must be divided by 2 multiple times
+        # TODO: make constraints on input image size
         # h, w = config.IMAGE_SHAPE[:2]
         # if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
         #     raise Exception("Image size must be dividable by 2 at least 6 times "
         #                     "to avoid fractions when downscaling and upscaling."
         #                     "For example, use 256, 320, 384, 448, 512, ... etc. ")
 
-        # Inputs
+        # input image -> KL.Input
         input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
-            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
             input_yolo_target = KL.Input(
                 shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
                 name="input_yolo_target", dtype=tf.float32)
@@ -781,7 +790,7 @@ class MaskYOLO():
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             input_gt_boxes = KL.Input(
                 shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
-            # Normalize coordinates
+            # Normalize box coordinates
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
 
@@ -803,15 +812,14 @@ class MaskYOLO():
         yolo_model = build_yolo_model(config, config.TOP_FEATURE_MAP_DEPTH)
         yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
-        feature_map_shape = [int((config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0]),
-                             int((config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0])]
+        # feature_map_shape = [int((config.IMAGE_SHAPE[0] / config.BACKBONE_STRIDES)[0]),
+        #                      int((config.IMAGE_SHAPE[1] / config.BACKBONE_STRIDES)[0])]
 
         # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
-        yolo_rois = DecodeYOLOLayer(feature_map_shape=feature_map_shape,
-                                    config=config)([yolo_output])
+        yolo_rois = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
 
-        rois, target_class_ids, target_bbox, target_mask = \
-            DetectionTargetLayer(config, name="proposal_targets")([
+        rois, target_class_ids, target_mask = \
+            DetectMaskTargetLayer(config, name="proposal_targets")([
                 yolo_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
         myolo_mask = build_mask_graph(rois, [myolo_feature_maps],
@@ -1044,9 +1052,14 @@ def norm_boxes_graph(boxes, shape):
 
 
 class DecodeYOLOLayer(KE.Layer):
-    def __init__(self, feature_map_shape, config, **kwargs):
+    """ DecodeYOLOLayer: similar to the idea of 'ProposalLayer' in Mask-RCNN.
+    inputs[0] is the output of YOLO last layer with shape [None, 7, 7, 3, 9]
+    Here we decode the YOLO output, convert bx, by, tw, th to x1, y1, x2, y2
+    in normalized form (0-1)
+
+    """
+    def __init__(self, config, **kwargs):
         super(DecodeYOLOLayer, self).__init__(**kwargs)
-        self.feature_map_shape = feature_map_shape
         self.config = config
 
     def call(self, inputs):
@@ -1075,7 +1088,7 @@ class DecodeYOLOLayer(KE.Layer):
         pred_maxes = pred_box_xy + pred_wh_half
 
         # xmin, ymin, xmax, ymax
-        output_boxes = tf.concat([pred_mins * self.feature_map_shape[0], pred_maxes * self.feature_map_shape[1]], axis=-1)
+        output_boxes = tf.concat([pred_mins, pred_maxes], axis=-1)
         output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
                                                  output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
                                                  output_boxes.shape[-1]])
@@ -1083,7 +1096,7 @@ class DecodeYOLOLayer(KE.Layer):
         return output_boxes
 
     def compute_output_shape(self, input_shape):
-        return (None, 147, 4)
+        return (None, input_shape[1] * input_shape[2] * input_shape[3], 4)
 
 
 # def decode_yolo4one(yolo_out, anchors, nb_class, feature_map_shape, obj_thre=0.3, nms_thre=0.3):
