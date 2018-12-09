@@ -333,7 +333,7 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             if b == 0:
                 batch_yolo_target = np.zeros((batch_size, config.GRID_H, config.GRID_W,
                                               config.N_BOX, 4 + 1 + config.NUM_CLASSES))
-                batch_yolo_true_boxes = np.zeros((batch_size, 1, 1, 1, config.MAX_GT_INSTANCES), 4)
+                batch_yolo_true_boxes = np.zeros((batch_size, 1, 1, 1, config.TRUE_BOX_BUFFER), 4)
                 batch_images = np.zeros((batch_size,) + image.shape, dtype=np.float32)
                 batch_gt_class_ids = np.zeros((batch_size, config.MAX_GT_INSTANCES), dtype=np.int32)
                 batch_gt_boxes = np.zeros((batch_size, config.MAX_GT_INSTANCES, 4), dtype=np.int32)

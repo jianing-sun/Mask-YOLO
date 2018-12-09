@@ -444,7 +444,7 @@ def overlaps_graph(boxes1, boxes2):
     return overlaps
 
 
-def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config):
+def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
@@ -467,11 +467,11 @@ def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config
     """
     # Assertions
     asserts = [
-        tf.Assert(tf.greater(tf.shape(yolo_rois)[0], 0), [yolo_rois],
+        tf.Assert(tf.greater(tf.shape(yolo_proposals)[0], 0), [yolo_proposals],
                   name="roi_assertion"),
     ]
     with tf.control_dependencies(asserts):
-        yolo_rois = tf.identity(yolo_rois)
+        yolo_proposals = tf.identity(yolo_proposals)
 
     # Remove zero padding
     # proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
@@ -493,7 +493,7 @@ def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config
     # gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
-    overlaps = overlaps_graph(yolo_rois, gt_boxes)
+    overlaps = overlaps_graph(yolo_proposals, gt_boxes)
 
     # Compute overlaps with crowd boxes [proposals, crowd_boxes]
     # crowd_overlaps = overlaps_graph(proposals, crowd_boxes)
@@ -522,8 +522,8 @@ def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config
     # negative_indices = tf.random_shuffle(negative_indices)[:negative_count]
 
     # Gather selected ROIs
-    positive_rois = tf.gather(yolo_rois, positive_indices)
-    negative_rois = tf.gather(yolo_rois, negative_indices)
+    positive_rois = tf.gather(yolo_proposals, positive_indices)
+    negative_rois = tf.gather(yolo_proposals, negative_indices)
 
     # Assign positive ROIs to GT boxes.
     positive_overlaps = tf.gather(overlaps, positive_indices)
@@ -546,22 +546,28 @@ def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config
     roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
 
     # Compute mask targets
-    boxes = positive_rois
+    x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
+    boxes = tf.concat([y1, x1, y2, x2], axis=1)     # tf.image.crop_and_resize required
+    # boxes = positive_rois
+
+    # TODO: correct this
     if config.USE_MINI_MASK:
-        # TODO: amend this 
+        pass
+
         # Transform ROI coordinates from normalized image space
         # to normalized mini-mask space.
-        x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
-        gt_x1, gt_y1, gt_x2, gt_y2 = tf.split(roi_gt_boxes, 4, axis=1)
-        gt_w = gt_x2 - gt_x1
-        gt_h = gt_y2 - gt_y1
+        # x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
+        # gt_x1, gt_y1, gt_x2, gt_y2 = tf.split(roi_gt_boxes, 4, axis=1)
+        # gt_w = gt_x2 - gt_x1
+        # gt_h = gt_y2 - gt_y1
+        #
+        # x1 = (x1 - gt_x1) / gt_w
+        # y1 = (y1 - gt_y1) / gt_h
+        # x2 = (x2 - gt_x1) / gt_w
+        # y2 = (y2 - gt_y1) / gt_h
+        #
+        # boxes = tf.concat([y1, x1, y2, x2], axis=1)  # tf.image.crop_and_resize required
 
-        x1 = (x1 - gt_x1) / gt_w
-        y1 = (y1 - gt_y1) / gt_h
-        x2 = (x2 - gt_x1) / gt_w
-        y2 = (y2 - gt_y1) / gt_h
-
-        boxes = tf.concat([x1, y1, x2, y2], 1)
     box_ids = tf.range(0, tf.shape(roi_masks)[0])
     masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
                                      box_ids,
@@ -576,15 +582,15 @@ def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config
     # Append negative ROIs and pad bbox deltas and masks that
     # are not used for negative ROIs with zeros.
     yolo_rois = tf.concat([positive_rois, negative_rois], axis=0)
-    N = tf.shape(negative_rois)[0]
-    # P = tf.maximum(yolo_rois.shape[0] - tf.shape(yolo_rois)[0], 0)
-    # rois = tf.pad(rois, [(0, P), (0, 0)])
+    # N = tf.shape(negative_rois)[0]
+    # P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - tf.shape(yolo_rois)[0], 0)
+    # yolo_rois = tf.pad(yolo_rois, [(0, P), (0, 0)])
     # roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N), (0, 0)])
-    roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N)])
+    # roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N)])
     # deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
-    masks = tf.pad(masks, [[0, N], (0, 0), (0, 0)])
+    # masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
 
-    return yolo_rois, roi_gt_class_ids, masks
+    return yolo_rois, roi_gt_class_ids, 0, masks
 
 
 class DetectMaskTargetLayer(KE.Layer):
@@ -823,7 +829,7 @@ class MaskYOLO():
         # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
         yolo_rois = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
 
-        rois, target_class_ids, target_mask = \
+        rois, target_class_ids, dummy, target_mask = \
             DetectMaskTargetLayer(config, name="proposal_targets")([
                 yolo_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
