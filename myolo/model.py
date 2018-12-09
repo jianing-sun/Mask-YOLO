@@ -444,12 +444,12 @@ def overlaps_graph(boxes1, boxes2):
     return overlaps
 
 
-def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config):
+def detect_mask_target_graph(yolo_rois, gt_class_ids, gt_boxes, gt_masks, config):
     """Generates detection targets for one image. Subsamples proposals and
     generates target class IDs, bounding box deltas, and masks for each.
 
     Inputs:
-    proposals: [7x7x3, (xmin, ymin, xmax, ymax)] in normalized coordinates. Might
+    yolo_rois: [7x7x3, (xmin, ymin, xmax, ymax)] in normalized coordinates. Might
                be zero padded if there are not enough proposals.
     gt_class_ids: [TRUE_BOX_BUFFER] int class IDs
     gt_boxes: [TRUE_BOX_BUFFER, (xmin, ymin, xmax, ymax)] in normalized coordinates.
@@ -467,11 +467,11 @@ def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config
     """
     # Assertions
     asserts = [
-        tf.Assert(tf.greater(tf.shape(proposals)[0], 0), [proposals],
+        tf.Assert(tf.greater(tf.shape(yolo_rois)[0], 0), [yolo_rois],
                   name="roi_assertion"),
     ]
     with tf.control_dependencies(asserts):
-        proposals = tf.identity(proposals)
+        yolo_rois = tf.identity(yolo_rois)
 
     # Remove zero padding
     # proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
@@ -493,7 +493,7 @@ def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config
     # gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
     # Compute overlaps matrix [proposals, gt_boxes]
-    overlaps = overlaps_graph(proposals, gt_boxes)
+    overlaps = overlaps_graph(yolo_rois, gt_boxes)
 
     # Compute overlaps with crowd boxes [proposals, crowd_boxes]
     # crowd_overlaps = overlaps_graph(proposals, crowd_boxes)
@@ -522,8 +522,8 @@ def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config
     # negative_indices = tf.random_shuffle(negative_indices)[:negative_count]
 
     # Gather selected ROIs
-    positive_rois = tf.gather(proposals, positive_indices)
-    negative_rois = tf.gather(proposals, negative_indices)
+    positive_rois = tf.gather(yolo_rois, positive_indices)
+    negative_rois = tf.gather(yolo_rois, negative_indices)
 
     # Assign positive ROIs to GT boxes.
     positive_overlaps = tf.gather(overlaps, positive_indices)
@@ -548,6 +548,7 @@ def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config
     # Compute mask targets
     boxes = positive_rois
     if config.USE_MINI_MASK:
+        # TODO: amend this 
         # Transform ROI coordinates from normalized image space
         # to normalized mini-mask space.
         x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
@@ -574,16 +575,16 @@ def detect_mask_target_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config
 
     # Append negative ROIs and pad bbox deltas and masks that
     # are not used for negative ROIs with zeros.
-    rois = tf.concat([positive_rois, negative_rois], axis=0)
-    # N = tf.shape(negative_rois)[0]
-    # P = tf.maximum(config.TRAIN_ROIS_PER_IMAGE - tf.shape(rois)[0], 0)
+    yolo_rois = tf.concat([positive_rois, negative_rois], axis=0)
+    N = tf.shape(negative_rois)[0]
+    # P = tf.maximum(yolo_rois.shape[0] - tf.shape(yolo_rois)[0], 0)
     # rois = tf.pad(rois, [(0, P), (0, 0)])
-    # roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N + P), (0, 0)])
-    # roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N + P)])
+    # roi_gt_boxes = tf.pad(roi_gt_boxes, [(0, N), (0, 0)])
+    roi_gt_class_ids = tf.pad(roi_gt_class_ids, [(0, N)])
     # deltas = tf.pad(deltas, [(0, N + P), (0, 0)])
-    # masks = tf.pad(masks, [[0, N + P], (0, 0), (0, 0)])
+    masks = tf.pad(masks, [[0, N], (0, 0), (0, 0)])
 
-    return rois, roi_gt_class_ids, masks
+    return yolo_rois, roi_gt_class_ids, masks
 
 
 class DetectMaskTargetLayer(KE.Layer):
@@ -783,14 +784,18 @@ class MaskYOLO():
                 name="input_yolo_target", dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
+
             # 1. GT Class IDs (zero padded)
             input_gt_class_ids = KL.Input(
                 shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+
             # 2. GT Boxes in pixels (zero padded)
+
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             input_gt_boxes = KL.Input(
                 shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
-            # Normalize box coordinates
+
+            # Normalize box coordinates (divide by the image width and height)
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
                 x, K.shape(input_image)[1:3]))(input_gt_boxes)
 
@@ -1030,17 +1035,17 @@ class MaskYOLO():
 
 def norm_boxes_graph(boxes, shape):
     """Converts boxes from pixel coordinates to normalized coordinates.
-    boxes: [..., (y1, x1, y2, x2)] in pixel coordinates
+    boxes: [..., (x1, y1, x2, y2)] in pixel coordinates
     shape: [..., (height, width)] in pixels
 
-    Note: In pixel coordinates (y2, x2) is outside the box. But in normalized
+    Note: In pixel coordinates (x2, y2) is outside the box. But in normalized
     coordinates it's inside the box.
 
     Returns:
-        [..., (y1, x1, y2, x2)] in normalized coordinates
+        [..., (x1, y1, x2, y2)] in normalized coordinates
     """
     h, w = tf.split(tf.cast(shape, tf.float32), 2)
-    scale = tf.concat([h, w, h, w], axis=-1) - tf.constant(1.0)
+    scale = tf.concat([w, h, w, h], axis=-1) - tf.constant(1.0)
     shift = tf.constant([0., 0., 1., 1.])
     return tf.divide(boxes - shift, scale)
 
