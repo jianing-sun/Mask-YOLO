@@ -784,7 +784,7 @@ class MaskYOLO():
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
-            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
+            input_true_boxes = KL.Input(shape=(None, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
             input_yolo_target = KL.Input(
                 shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
                 name="input_yolo_target", dtype=tf.float32)
