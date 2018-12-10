@@ -412,6 +412,8 @@ class PyramidROIAlign(KE.Layer):
 def overlaps_graph(boxes1, boxes2):
     """Computes IoU overlaps between two sets of boxes.
     boxes1, boxes2: [N, (x1, y1, x2, y2)].
+    return: overlaps: IoU matrix with shape [boxes1.shape[0], boxes2.shape[0]]
+    as such each row is the iou ratios of one generated rois agaist all gt_boxes
     """
     # 1. Tile boxes2 and repeat boxes1. This allows us to compare
     # every boxes1 against every boxes2 without loops.
@@ -527,12 +529,12 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
 
     # Assign positive ROIs to GT boxes.
     positive_overlaps = tf.gather(overlaps, positive_indices)
-    roi_gt_box_assignment = tf.cond(
+    roi_gt_box_assignment = tf.cond(     # assign the class number of gt_boxes (which one)
         tf.greater(tf.shape(positive_overlaps)[1], 0),
         true_fn=lambda: tf.argmax(positive_overlaps, axis=1),
         false_fn=lambda: tf.cast(tf.constant([]), tf.int64)
     )
-    roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
+    # roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
     roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
 
     # Compute bbox refinement for positive ROIs
@@ -841,6 +843,7 @@ class MaskYOLO():
         # 1. YOLO custom loss (bbox loss and binary classification loss)
         yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
             [input_yolo_target, yolo_output, input_true_boxes])
+
         # 2. mask_loss
         mask_loss = KL.Lambda(lambda x: mrcnn_mask_loss_graph(*x), name="mrcnn_mask_loss")(
             [target_mask, target_class_ids, myolo_mask])

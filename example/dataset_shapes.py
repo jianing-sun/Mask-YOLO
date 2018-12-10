@@ -25,7 +25,7 @@ class ShapesConfig(Config):
     IMAGES_PER_GPU = 8
 
     # Number of classes (including background)
-    NUM_CLASSES = 1 + 3  # background + 3 shapes
+    NUM_CLASSES = 3      # (no background) 3 shapes
 
     # Use small images for faster training. Set the limits of the small side
     # the large side, and that determines the image shape.
@@ -45,7 +45,7 @@ class ShapesConfig(Config):
     # use small validation steps since the epoch is small
     VALIDATION_STEPS = 5
 
-    USE_MINI_MASK = False
+    USE_MINI_MASK = True
 
 
 class ShapesDataset(utils.Dataset):
@@ -60,9 +60,10 @@ class ShapesDataset(utils.Dataset):
         height, width: the size of the generated images.
         """
         # Add classes
-        self.add_class("shapes", 1, "square")
-        self.add_class("shapes", 2, "circle")
-        self.add_class("shapes", 3, "triangle")
+        self.add_class("shapes", 0, "square")
+        self.add_class("shapes", 1, "circle")
+        self.add_class("shapes", 2, "triangle")
+        self.class_info = self.class_info[1:]
 
         # Add images
         # Generate random specifications of images (i.e. color and
