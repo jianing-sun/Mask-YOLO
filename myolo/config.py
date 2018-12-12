@@ -28,7 +28,7 @@ class Config(object):
     N_BOX = 3
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
-    BATCH_SIZE = 8
+    BATCH_SIZE = 2
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
@@ -42,7 +42,7 @@ class Config(object):
     NAME = None  # Override in sub-classes
 
     # NUMBER OF GPUs to use. When using only a CPU, this needs to be set to 1.
-    GPU_COUNT = 1
+    GPU_COUNT = 0
 
     # Number of images to train with on each GPU. A 12GB GPU can typically
     # handle 2 images of 1024x1024px.
@@ -160,7 +160,7 @@ class Config(object):
     # enough positive proposals to fill this and keep a positive:negative
     # ratio of 1:3. You can increase the number of proposals by adjusting
     # the RPN NMS threshold.
-    TRAIN_ROIS_PER_IMAGE = 200
+    TRAIN_ROIS_PER_IMAGE = 147
 
     # Percent of positive ROIs used to train classifier/mask heads
     ROI_POSITIVE_RATIO = 0.33

@@ -288,7 +288,6 @@ def resize(image, output_shape, order=1, mode='constant', cval=0, clip=True,
             preserve_range=preserve_range)
 
 
-
 def data_generator(dataset, config, shuffle=True, augment=False, augmentation=None,
                    batch_size=1, no_augmentation_sources=None):
     """A generator that returns images and corresponding target class ids,
@@ -467,7 +466,8 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
                     true_box_index = true_box_index % config.TRUE_BOX_BUFFER
 
             # Add to batch
-            batch_images[b] = mold_image(image.astype(np.float32), config)
+            # batch_images[b] = mold_image(image.astype(np.float32), config)
+            batch_images[b] = image / 255.        # normalize image
             batch_gt_class_ids[b, :gt_class_ids.shape[0]] = gt_class_ids
             batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
             batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
@@ -478,14 +478,21 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             if b >= batch_size:
                 inputs = [batch_images, batch_yolo_true_boxes, batch_yolo_target,
                           batch_gt_class_ids, batch_gt_boxes, batch_gt_masks]
+
+                # Model
+                # inputs = [input_image, input_true_boxes, input_yolo_target,
+                          # input_gt_class_ids, input_gt_boxes, input_gt_masks]
+
                 outputs = []
 
                 yield inputs, outputs
 
                 # start a new batch
                 b = 0
+
         except (GeneratorExit, KeyboardInterrupt):
             raise
+
         except:
             # Log it and skip the image
             logging.exception("Error processing image {}".format(
