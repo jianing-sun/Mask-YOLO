@@ -23,6 +23,7 @@ class ShapesConfig(Config):
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
     GPU_COUNT = 0
     IMAGES_PER_GPU = 8
+    BATCH_SIZE = 8
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 3      # (no background) 3 shapes
@@ -34,7 +35,7 @@ class ShapesConfig(Config):
 
     # Use smaller anchors because our image and objects are small
     # RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)  # anchor side in pixels
-    ANCHORS = [1.91, 1.61, 5.04, 4.38, 6.67, 4.90]
+    ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
     # Reduce training ROIs per image because the images are small and have
     # few objects. Aim to allow ROI sampling to pick 33% positive ROIs.
     TRAIN_ROIS_PER_IMAGE = 147  # 7x7x3
@@ -45,7 +46,7 @@ class ShapesConfig(Config):
     # use small validation steps since the epoch is small
     VALIDATION_STEPS = 5
 
-    USE_MINI_MASK = True
+    USE_MINI_MASK = False
 
 
 class ShapesDataset(utils.Dataset):

@@ -122,7 +122,7 @@ def extract_bboxes(mask):
     """Compute bounding boxes from masks.
     mask: [height, width, num_instances]. Mask pixels are either 1 or 0.
 
-    Returns: bbox array [num_instances, (y1, x1, y2, x2)].
+    Returns: bbox array [num_instances, (x1, y1, x2, y2)].
     """
     boxes = np.zeros([mask.shape[-1], 4], dtype=np.int32)
     for i in range(mask.shape[-1]):

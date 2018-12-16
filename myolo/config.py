@@ -23,12 +23,12 @@ class Config(object):
     # ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
     # ANCHORS = [1.91, 1.61, 5.04, 4.38, 6.67, 4.90]
     # ANCHORS = [0.57273, 0.677385, 3.33843, 5.47434, 9.77052, 9.16828]
-    ANCHORS = [0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434]
+    ANCHORS = [0.57273, 0.577385, 2.07446, 2.26253, 4.33843, 4.47434]
 
     N_BOX = 3
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
-    BATCH_SIZE = 2
+    BATCH_SIZE = 8
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
@@ -116,7 +116,7 @@ class Config(object):
 
     # If enabled, resizes instance masks to a smaller size to reduce
     # memory load. Recommended when using high-resolution images.
-    USE_MINI_MASK = True
+    USE_MINI_MASK = False
     MINI_MASK_SHAPE = (56, 56)  # (height, width) of the mini-mask
 
     # Input image resizing

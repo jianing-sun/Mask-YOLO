@@ -553,21 +553,21 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
 
     # TODO: correct this
     if config.USE_MINI_MASK:
-        # pass
+        pass
         # Transform ROI coordinates from normalized image space
         # to normalized mini-mask space.
 
-        x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
-        gt_x1, gt_y1, gt_x2, gt_y2 = tf.split(roi_gt_boxes, 4, axis=1)
-        gt_w = gt_x2 - gt_x1
-        gt_h = gt_y2 - gt_y1
-
-        x1 = (x1 - gt_x1) / gt_w
-        y1 = (y1 - gt_y1) / gt_h
-        x2 = (x2 - gt_x1) / gt_w
-        y2 = (y2 - gt_y1) / gt_h
-
-        boxes = tf.concat([y1, x1, y2, x2], axis=1)  # tf.image.crop_and_resize required
+        # x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
+        # gt_x1, gt_y1, gt_x2, gt_y2 = tf.split(roi_gt_boxes, 4, axis=1)
+        # gt_w = gt_x2 - gt_x1
+        # gt_h = gt_y2 - gt_y1
+        #
+        # x1 = (x1 - gt_x1) / gt_w
+        # y1 = (y1 - gt_y1) / gt_h
+        # x2 = (x2 - gt_x1) / gt_w
+        # y2 = (y2 - gt_y1) / gt_h
+        #
+        # boxes = tf.concat([y1, x1, y2, x2], axis=1)  # tf.image.crop_and_resize required
 
     box_ids = tf.range(0, tf.shape(roi_masks)[0])
     masks = tf.image.crop_and_resize(tf.cast(roi_masks, tf.float32), boxes,
@@ -785,7 +785,7 @@ class MaskYOLO():
 
         if mode == "training":
             # input_yolo_anchors and true_boxes
-            input_true_boxes = KL.Input(shape=(None, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
             input_yolo_target = KL.Input(
                 shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
                 name="input_yolo_target", dtype=tf.float32)
@@ -923,7 +923,7 @@ class MaskYOLO():
         # Callbacks
         callbacks = [
             keras.callbacks.TensorBoard(log_dir='./', histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint('./', verbose=0, save_weights_only=True),
+            keras.callbacks.ModelCheckpoint('./model_1216.h5', verbose=0, save_weights_only=True),
         ]
 
         # Add custom callbacks to the list
@@ -963,9 +963,16 @@ class MaskYOLO():
         metrics. Then calls the Keras compile() function.
         """
         # Optimizer object
-        optimizer = keras.optimizers.SGD(
-            lr=learning_rate, momentum=momentum,
-            clipnorm=self.config.GRADIENT_CLIP_NORM)
+        # optimizer = keras.optimizers.SGD(
+        #     lr=learning_rate, momentum=momentum,
+        #     clipnorm=self.config.GRADIENT_CLIP_NORM)
+
+        optimizer = keras.optimizers.Adam(lr=learning_rate,
+                                          beta_1=0.9,
+                                          beta_2=0.999,
+                                          epsilon=1e-08,
+                                          decay=0.0)
+
         # Add Losses
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
@@ -1040,6 +1047,47 @@ class MaskYOLO():
             # if trainable and verbose > 0:
             #     log("{}{:20}   ({})".format(" " * indent, layer.name,
             #                                 layer.__class__.__name__))
+
+    def load_weights(self, filepath, by_name=False, exclude=None):
+        """Modified version of the corresponding Keras function with
+        the addition of multi-GPU support and the ability to exclude
+        some layers from loading.
+        exclude: list of layer names to exclude
+        """
+        import h5py
+        # Conditional import to support versions of Keras before 2.2
+        # TODO: remove in about 6 months (end of 2018)
+        try:
+            from keras.engine import saving
+        except ImportError:
+            # Keras before 2.2 used the 'topology' namespace.
+            from keras.engine import topology as saving
+
+        if exclude:
+            by_name = True
+
+        if h5py is None:
+            raise ImportError('`load_weights` requires h5py.')
+        f = h5py.File(filepath, mode='r')
+        if 'layer_names' not in f.attrs and 'model_weights' in f:
+            f = f['model_weights']
+
+        # In multi-GPU training, we wrap the model. Get layers
+        # of the inner model because they have the weights.
+        keras_model = self.keras_model
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
+            else keras_model.layers
+
+        # Exclude some layers
+        if exclude:
+            layers = filter(lambda l: l.name not in exclude, layers)
+
+        if by_name:
+            saving.load_weights_from_hdf5_group_by_name(f, layers)
+        else:
+            saving.load_weights_from_hdf5_group(f, layers)
+        if hasattr(f, 'close'):
+            f.close()
 
 
 def norm_boxes_graph(boxes, shape):
