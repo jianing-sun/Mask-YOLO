@@ -23,7 +23,7 @@ class ShapesConfig(Config):
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
     GPU_COUNT = 0
     IMAGES_PER_GPU = 8
-    BATCH_SIZE = 8
+    BATCH_SIZE = 1
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 3      # (no background) 3 shapes

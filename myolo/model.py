@@ -1267,7 +1267,11 @@ class DecodeYOLOLayer(KE.Layer):
 
         # xmin, ymin, xmax, ymax
         output_boxes = tf.concat([pred_mins, pred_maxes], axis=-1)
-        output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
+        # output_boxes = tf.reshape(output_boxes, [output_boxes.shape[0],
+        #                                          output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
+        #                                          output_boxes.shape[-1]])
+
+        output_boxes = tf.reshape(output_boxes, [-1,
                                                  output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
                                                  output_boxes.shape[-1]])
 

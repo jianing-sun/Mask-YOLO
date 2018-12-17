@@ -52,5 +52,6 @@ original_image, gt_class_id, gt_bbox, gt_mask = mutils.load_image_gt(dataset_val
 results = model.detect_for_one([original_image], verbose=1)
 
 r = results[0]
-visualize.display_instances(original_image, r['rois'], r['masks'], r['class_ids'],
-                            dataset_val.class_names, r['scores'], ax=get_ax())
+print(r)
+# visualize.display_instances(original_image, r['rois'], r['masks'], r['class_ids'],
+#                             dataset_val.class_names, r['scores'], ax=get_ax())

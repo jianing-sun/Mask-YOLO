@@ -28,7 +28,7 @@ class Config(object):
     N_BOX = 3
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
-    BATCH_SIZE = 8
+    BATCH_SIZE = 1
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
