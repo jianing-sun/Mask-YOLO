@@ -229,7 +229,7 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         # Read image
         image = skimage.io.imread(args.image)
         # Detect objects
-        r = model.detect([image], verbose=1)[0]
+        r = model.detect_for_one([image], verbose=1)[0]
         # Color splash
         splash = color_splash(image, r['masks'])
         # Save output
@@ -259,7 +259,7 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
                 # OpenCV returns images as BGR, convert to RGB
                 image = image[..., ::-1]
                 # Detect objects
-                r = model.detect([image], verbose=0)[0]
+                r = model.detect_for_one([image], verbose=0)[0]
                 # Color splash
                 splash = color_splash(image, r['masks'])
                 # RGB -> BGR to save image to video

@@ -1,5 +1,5 @@
 import numpy as np
-from example.dataset_shapes import ShapesDataset, ShapesConfig
+from example.shapes.dataset_shapes import ShapesDataset, ShapesConfig
 import myolo.model as modellib
 from myolo import myolo_utils as mutils
 from PIL import Image

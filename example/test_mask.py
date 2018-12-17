@@ -1,7 +1,7 @@
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from myolo import myolo_utils as mutils
-from example.shapes.dataset_shapes import ShapesDataset, ShapesConfig
+from example.dataset_shapes import ShapesDataset, ShapesConfig
 from PIL import Image
 import numpy as np
 

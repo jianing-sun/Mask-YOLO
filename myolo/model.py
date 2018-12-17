@@ -1122,7 +1122,7 @@ class MaskYOLO():
         if hasattr(f, 'close'):
             f.close()
 
-    def detect(self, images, verbose=0):
+    def detect_for_one(self, image, verbose=0):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -1134,8 +1134,7 @@ class MaskYOLO():
         masks: [H, W, N] instance binary masks
         """
         assert self.mode == "inference", "Create model in inference mode."
-        assert len(
-            images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
+        assert len(image) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
 
         # if verbose:
         #     log("Processing {} images".format(len(images)))
@@ -1143,15 +1142,15 @@ class MaskYOLO():
         #         log("image", image)
 
         # Mold inputs to format expected by the neural network
-        normed_images = images / 255.
+        normed_image = image[0] / 255.
         # molded_images, image_metas, windows = self.mold_inputs(images)
 
         # Validate image sizes
         # All images in a batch MUST be of the same size
-        image_shape = normed_images[0].shape
-        for g in normed_images[1:]:
-            assert g.shape == image_shape,\
-                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
+        image_shape = normed_image[0].shape
+        # for g in normed_image[1:]:
+        #     assert g.shape == image_shape,\
+        #         "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
 
         # Anchors
         # anchors = self.get_anchors(image_shape)
@@ -1165,27 +1164,27 @@ class MaskYOLO():
         #     log("anchors", anchors)
 
         # Run object detection
-        # outputs = [yolo_output, output_rois, myolo_mask, yolo_sum_loss, mask_loss]
-        dummy_array = np.zeros((1, 1, 1, 1, 50, 4))
+        # outputs = [yolo_output, yolo_proposals, myolo_mask]
+        dummy_array = np.zeros((1, 1, 1, 1, 15, 4))
 
-        yolo_output, output_rois, myolo_mask, _, _ =\
-            self.keras_model.predict([normed_images], verbose=0)
+        normed_image = np.expand_dims(normed_image, axis=0)
+
+        yolo_output, yolo_proposals, myolo_mask =\
+            self.keras_model.predict([normed_image, dummy_array], verbose=0)
+
         # Process detections
         results = []
-        for i, image in enumerate(images):
-            # final_rois, final_class_ids, final_scores, final_masks =\
-            #     self.unmold_detections(detections[i], mrcnn_mask[i],
-            #                            image.shape, molded_images[i].shape,
-            #                            windows[i])
+        # final_rois, final_class_ids, final_scores, final_masks =\
+        #     self.unmold_detections(detections[i], mrcnn_mask[i],
+        #                            image.shape, molded_images[i].shape,
+        #                            windows[i])
 
-            bboxes = mutils.decode_one_yolo_output(yolo_output, config.ANCHORS, config.NUM_CLASSES)
+        bboxes = mutils.decode_one_yolo_output(yolo_output[0], config.ANCHORS, config.NUM_CLASSES)
 
-            results.append({
-                "rois": final_rois,
-                "class_ids": final_class_ids,
-                "scores": final_scores,
-                "masks": final_masks,
-            })
+        results.append({
+            "bboxes": bboxes,
+            "masks": myolo_mask,
+        })
 
         return results
 
