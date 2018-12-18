@@ -23,7 +23,7 @@ class ShapesConfig(Config):
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
     GPU_COUNT = 0
     IMAGES_PER_GPU = 8
-    BATCH_SIZE = 1
+    BATCH_SIZE = 16
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 3      # (no background) 3 shapes
@@ -170,7 +170,8 @@ class ShapesDataset(utils.Dataset):
             shape, color, dims = self.random_shape(height, width)
             shapes.append((shape, color, dims))
             x, y, s = dims
-            boxes.append([y - s, x - s, y + s, x + s])
+            boxes.append([x - s, y - s, x + s, y + s])
+            # boxes.append([y - s, x - s, y + s, x + s])
         # Apply non-max suppression wit 0.3 threshold to avoid
         # shapes covering each other
         keep_ixs = utils.non_max_suppression(np.array(boxes), np.arange(N), 0.3)

@@ -674,33 +674,33 @@ def build_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=False)
     # ROI Pooling
     # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
     x = PyramidROIAlign([pool_size, pool_size],
-                        name="roi_align_mask")([rois] + feature_maps)  # [8, ?, 14, 14, 512]
+                        name="roi_align_mask")([rois] + feature_maps)  # [8, ?, 14, 14, 515122]
 
     # Conv layers
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="myolo_mask_conv1")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(), name='myolo_mask_bn1')(x)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="myolo_mask_conv2")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='myolo_mask_bn2')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="myolo_mask_conv3")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='myolo_mask_bn3')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
+    x = KL.TimeDistributed(KL.Conv2D(512, (3, 3), padding="same"),
                            name="myolo_mask_conv4")(x)
     x = KL.TimeDistributed(KL.BatchNormalization(),
                            name='myolo_mask_bn4')(x, training=train_bn)
     x = KL.Activation('relu')(x)
 
-    x = KL.TimeDistributed(KL.Conv2DTranspose(256, (2, 2), strides=2, activation="relu"),
+    x = KL.TimeDistributed(KL.Conv2DTranspose(512, (2, 2), strides=2, activation="relu"),
                            name="myolo_mask_deconv")(x)
     x = KL.TimeDistributed(KL.Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"),
                            name="myolo_mask")(x)
@@ -763,7 +763,7 @@ class MaskYOLO():
         config: A Sub-class of the Config class
         model_dir: Directory to save training logs and trained weights
         """
-        assert mode in ['training', 'inference']
+        assert mode in ['training', 'inference', 'yolo']
         self.mode = mode
         self.config = config
         self.model_dir = model_dir
@@ -771,7 +771,7 @@ class MaskYOLO():
         self.epoch = 0
 
     def build(self, mode, config):
-        assert mode in ['training', 'inference']
+        assert mode in ['training', 'inference', 'yolo']
 
         # TODO: make constraints on input image size
         # h, w = config.IMAGE_SHAPE[:2]
@@ -820,12 +820,20 @@ class MaskYOLO():
             # required input for YOLO model
             input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
 
+        elif mode == "yolo":
+
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
+
+            input_yolo_target = KL.Input(
+                shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
+                name="input_yolo_target", dtype=tf.float32)
+
         C4 = mobilenet_graph(input_image, config.BACKBONE, stage5=False)
-        C4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")(C4)
+        # C4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")(C4)
         myolo_feature_maps = C4
 
         # build YOLO branch graph
-        yolo_model = build_yolo_model(config, config.TOP_DOWN_PYRAMID_SIZE)
+        yolo_model = build_yolo_model(config, config.TOP_DOWN_PYRAMID_SIZE*2)
         yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
 
         # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
@@ -886,6 +894,19 @@ class MaskYOLO():
             #                   mrcnn_mask, rpn_rois, rpn_class, rpn_bbox],
             #                  name='mask_rcnn')
 
+        elif mode == "yolo":
+
+            # 1. YOLO custom loss (bbox loss and binary classification loss)
+            yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
+                [input_yolo_target, yolo_output, input_true_boxes])
+
+            # Model
+            inputs = [input_image, input_true_boxes, input_yolo_target]
+
+            outputs = [yolo_output, yolo_sum_loss]
+
+            model = KM.Model(inputs, outputs, name="only_yolo")
+
         else:
             raise NotImplementedError
 
@@ -925,7 +946,7 @@ class MaskYOLO():
             augmentation. A source is string that identifies a dataset and is
             defined in the Dataset class.
         """
-        assert self.mode == "training", "Create model in training mode."
+        # assert self.mode == "training", "Create model in training mode.", "yolo"
 
         # Pre-defined layer regular expressions
         layer_regex = {
@@ -942,12 +963,32 @@ class MaskYOLO():
             layers = layer_regex[layers]
 
         # Data generators
-        train_generator = mutils.data_generator(train_dataset, self.config, shuffle=True,
-                                                augmentation=augmentation,
-                                                batch_size=self.config.BATCH_SIZE,
-                                                no_augmentation_sources=no_augmentation_sources)
-        val_generator = mutils.data_generator(val_dataset, self.config, shuffle=True,
-                                              batch_size=self.config.BATCH_SIZE)
+        train_info = []
+        for id in range(0, 500):
+            image, gt_class_ids, gt_boxes, gt_masks = \
+                mutils.load_image_gt(train_dataset, config, id,
+                                     use_mini_mask=config.USE_MINI_MASK)
+            train_info.append([image, gt_class_ids, gt_boxes, gt_masks])
+
+        val_info = []
+        for id in range(0, 50):
+            image, gt_class_ids, gt_boxes, gt_masks = \
+                mutils.load_image_gt(val_dataset, config, id,
+                                     use_mini_mask=config.USE_MINI_MASK)
+            val_info.append([image, gt_class_ids, gt_boxes, gt_masks])
+
+        train_generator = mutils.BatchGenerator(train_info, config, mode='yolo', shuffle=True, jitter=False, norm=True)
+
+        val_generator = mutils.BatchGenerator(val_info, config, mode='yolo', shuffle=True, jitter=False, norm=True)
+
+        # train_generator = mutils.data_generator(train_dataset, self.config, shuffle=True,
+        #                                         augmentation=augmentation,
+        #                                         batch_size=self.config.BATCH_SIZE,
+        #                                         no_augmentation_sources=no_augmentation_sources,
+        #                                         norm=True)
+        # val_generator = mutils.data_generator(val_dataset, self.config, shuffle=True,
+        #                                       batch_size=self.config.BATCH_SIZE,
+        #                                       norm=True)
 
         # Create log_dir if it does not exist
         # if not os.path.exists(self.log_dir):
@@ -956,7 +997,7 @@ class MaskYOLO():
         # Callbacks
         callbacks = [
             keras.callbacks.TensorBoard(log_dir='./', histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint('./model_1216.h5', verbose=0, save_weights_only=True),
+            keras.callbacks.ModelCheckpoint('./model_1217_yolo.h5', verbose=0, save_weights_only=True),
         ]
 
         # Add custom callbacks to the list
@@ -1010,7 +1051,12 @@ class MaskYOLO():
         # First, clear previously set losses to avoid duplication
         self.keras_model._losses = []
         self.keras_model._per_input_losses = {}
+
         loss_names = ["yolo_sum_loss",  "myolo_mask_loss"]
+
+        if self.mode == 'yolo':
+            loss_names = ['yolo_sum_loss']
+
         for name in loss_names:
             layer = self.keras_model.get_layer(name)
             if layer.output in self.keras_model.losses:
@@ -1022,11 +1068,11 @@ class MaskYOLO():
 
         # Add L2 Regularization
         # Skip gamma and beta weights of batch normalization layers.
-        reg_losses = [
-            keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
-            for w in self.keras_model.trainable_weights
-            if 'gamma' not in w.name and 'beta' not in w.name]
-        self.keras_model.add_loss(tf.add_n(reg_losses))
+        # reg_losses = [
+        #     keras.regularizers.l2(self.config.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+        #     for w in self.keras_model.trainable_weights
+        #     if 'gamma' not in w.name and 'beta' not in w.name]
+        # self.keras_model.add_loss(tf.add_n(reg_losses))
 
         # Compile
         self.keras_model.compile(
@@ -1177,7 +1223,7 @@ class MaskYOLO():
         # final_rois, final_class_ids, final_scores, final_masks =\
         #     self.unmold_detections(detections[i], mrcnn_mask[i],
         #                            image.shape, molded_images[i].shape,
-        #                            windows[i])
+        #                            windows[i]
 
         bboxes = mutils.decode_one_yolo_output(yolo_output[0], config.ANCHORS, config.NUM_CLASSES)
 

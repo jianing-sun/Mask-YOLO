@@ -20,9 +20,10 @@ dataset_val = ShapesDataset()
 dataset_val.load_shapes(50, config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1])
 dataset_val.prepare()
 
-model = modellib.MaskYOLO(mode="training", config=config)
-model.load_weights('./model_1216.h5')
+model = modellib.MaskYOLO(mode="yolo", config=config)
+# model.load_weights('./model_1216.h5')
 model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=5, layers='all')
+
 
 # image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=440, augment=None,
 #                               augmentation=None,
