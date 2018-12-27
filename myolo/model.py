@@ -75,11 +75,11 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
 
 
 ############################################################
-# YOLO branch to generat bbox and objectness prob
+# YOLO custom loss function
 ############################################################
 
 def yolo_custom_loss(y_true, y_pred, true_boxes):
-    mask_shape = tf.shape(y_true)[:4]
+    mask_shape = tf.shape(y_true)[:4]  # shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES]
 
     cell_x = tf.to_float(
         tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
@@ -104,7 +104,7 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
 
     ### adjust confidence
-    pred_box_conf = tf.sigmoid(y_pred[..., 4])
+    pred_box_conf = tf.sigmoid(y_pred[..., 4])   # in percentage
 
     ### adjust class probabilities
     pred_box_class = y_pred[..., 5:]
@@ -138,20 +138,20 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     union_areas = pred_areas + true_areas - intersect_areas
     iou_scores = tf.truediv(intersect_areas, union_areas)
 
-    true_box_conf = iou_scores * y_true[..., 4]
+    true_box_conf = iou_scores * y_true[..., 4]      # predicted confidences (iou scores) on true boxes
 
-    ### adjust class probabilities
-    true_box_class = tf.argmax(y_true[..., 5:], -1)
+    # adjust class probabilities
+    true_box_class = tf.argmax(y_true[..., 5:], -1)  # find the true box classes
 
     """
     Determine the masks
     """
     ### coordinate mask: simply the position of the ground truth boxes (the predictors)
-    coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * config.COORD_SCALE
+    coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * config.COORD_SCALE  # here expand dims has the same effect of reshape
 
     ### confidence mask: penelize predictors + penalize boxes with low IOU
     # penalize the confidence of the boxes, which have IOU with some ground truth box < 0.6
-    true_xy = true_boxes[..., 0:2]
+    true_xy = true_boxes[..., 0:2]  # center x and y coordinates
     true_wh = true_boxes[..., 2:4]
 
     true_wh_half = true_wh / 2.
@@ -179,7 +179,7 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     best_ious = tf.reduce_max(iou_scores, axis=4)
     conf_mask = conf_mask + tf.to_float(best_ious < 0.6) * (1 - y_true[..., 4]) * config.NO_OBJECT_SCALE
 
-    # penalize the confidence of the boxes, which are reponsible for corresponding ground truth box
+    # penalize the confidence of the boxes, which are responsible for corresponding ground truth box
     conf_mask = conf_mask + y_true[..., 4] * config.OBJECT_SCALE
 
     ### class mask: simply the position of the ground truth boxes (the predictors)
@@ -225,19 +225,23 @@ def yolo_custom_loss(y_true, y_pred, true_boxes):
     current_recall = nb_pred_box / (nb_true_box + 1e-6)
     total_recall = tf.assign_add(total_recall, current_recall)
 
-    # loss = tf.Print(loss, [tf.zeros((1))], message='Dummy Line \t', summarize=1000)
-    # loss = tf.Print(loss, [loss_xy], message='Loss XY \t', summarize=1000)
-    # loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
-    # loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
-    # loss = tf.Print(loss, [loss_class], message='Loss Class \t', summarize=1000)
-    # loss = tf.Print(loss, [loss], message='Total Loss \t', summarize=1000)
-    # loss = tf.Print(loss, [current_recall], message='Current Recall \t', summarize=1000)
-    # loss = tf.Print(loss, [total_recall / seen], message='Average Recall \t', summarize=1000)
+    # loss = tf.Print(loss, [tf.zeros((1))], message='\n Dummy Line \t', summarize=1000)
+    loss = tf.Print(loss, [loss_xy], message='\nLoss XY \t', summarize=1000)
+    loss = tf.Print(loss, [loss_wh], message='Loss WH \t', summarize=1000)
+    loss = tf.Print(loss, [loss_conf], message='Loss Conf \t', summarize=1000)
+    loss = tf.Print(loss, [loss_class], message='Loss Class \t', summarize=1000)
+    loss = tf.Print(loss, [loss], message='Total Loss \t', summarize=1000)
+    loss = tf.Print(loss, [current_recall], message='Current Recall \t', summarize=1000)
+    loss = tf.Print(loss, [total_recall / seen], message='Average Recall \t', summarize=1000)
 
     return loss
 
 
-def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
+############################################################
+# YOLO branch to generat bbox and objectness prob
+############################################################
+
+def yolo_branch_graph(x, config, alpha=1.0, depth_multiplier=1):
     """ YOLO branch following the feature map to generate bbox based on prior anchors
     :param x: input feature map
     :param true_boxes: input_true_boxes
@@ -264,7 +268,7 @@ def yolo_branch_graph(x, true_boxes, config, alpha=1.0, depth_multiplier=1):
     output = KL.Reshape((config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES))(x)
 
     # small hack to allow true_boxes to be registered when Keras build the model
-    output = KL.Lambda(lambda args: args[0])([output, true_boxes])
+    # output = KL.Lambda(lambda args: args[0])([output, true_boxes])
 
     return output
 
@@ -276,10 +280,11 @@ def build_yolo_model(config, depth):
     with shape [None, GRID_H, GRID_W, N_BOX, 5 + NUM_CLASSES]
     """
     input_feature_map = KL.Input(shape=[None, None, depth], name="input_yolo_feature_map")
-    input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
-    output = yolo_branch_graph(input_feature_map, input_true_boxes, config)
+    # input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4))
+    # output = yolo_branch_graph(input_feature_map, input_true_boxes, config)
+    output = yolo_branch_graph(input_feature_map, config)
 
-    return KM.Model([input_feature_map, input_true_boxes], output, name="yolo_model")
+    return KM.Model([input_feature_map], output, name="yolo_model")
 
 
 ############################################################
@@ -751,7 +756,7 @@ def myolo_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 ############################################################
 
 
-class MaskYOLO():
+class MaskYOLO:
     """ Build the overall structure of MaskYOLO class
     which generate bbox and class label on the YOLO side based on that then added with a Mask branch
     Note to myself: all the operations have to be built with Tensor and Layer so as to generate TF Graph
@@ -834,7 +839,10 @@ class MaskYOLO():
 
         # build YOLO branch graph
         yolo_model = build_yolo_model(config, config.TOP_DOWN_PYRAMID_SIZE*2)
-        yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
+        # yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
+        yolo_output = yolo_model([myolo_feature_maps])
+
+        print(yolo_model.summary())
 
         # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
         yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
@@ -906,6 +914,7 @@ class MaskYOLO():
             outputs = [yolo_output, yolo_sum_loss]
 
             model = KM.Model(inputs, outputs, name="only_yolo")
+            print(model.summary())
 
         else:
             raise NotImplementedError
@@ -951,11 +960,11 @@ class MaskYOLO():
         # Pre-defined layer regular expressions
         layer_regex = {
             # all layers but the backbone
-            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            # From a specific Resnet stage and up
-            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
-            "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # # From a specific Resnet stage and up
+            # "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            # "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
             # All layers
             "all": ".*",
         }
@@ -964,22 +973,24 @@ class MaskYOLO():
 
         # Data generators
         train_info = []
-        for id in range(0, 500):
+        for id in range(0, 1000):
             image, gt_class_ids, gt_boxes, gt_masks = \
                 mutils.load_image_gt(train_dataset, config, id,
                                      use_mini_mask=config.USE_MINI_MASK)
             train_info.append([image, gt_class_ids, gt_boxes, gt_masks])
 
         val_info = []
-        for id in range(0, 50):
+        for id in range(0, 100):
             image, gt_class_ids, gt_boxes, gt_masks = \
                 mutils.load_image_gt(val_dataset, config, id,
                                      use_mini_mask=config.USE_MINI_MASK)
             val_info.append([image, gt_class_ids, gt_boxes, gt_masks])
 
-        train_generator = mutils.BatchGenerator(train_info, config, mode='yolo', shuffle=True, jitter=False, norm=True)
+        train_generator = mutils.BatchGenerator(train_info, config, mode='yolo',
+                                                shuffle=True, jitter=False, norm=True)
 
-        val_generator = mutils.BatchGenerator(val_info, config, mode='yolo', shuffle=True, jitter=False, norm=True)
+        val_generator = mutils.BatchGenerator(val_info, config, mode='yolo',
+                                              shuffle=True, jitter=False, norm=True)
 
         # train_generator = mutils.data_generator(train_dataset, self.config, shuffle=True,
         #                                         augmentation=augmentation,
@@ -997,7 +1008,7 @@ class MaskYOLO():
         # Callbacks
         callbacks = [
             keras.callbacks.TensorBoard(log_dir='./', histogram_freq=0, write_graph=True, write_images=False),
-            keras.callbacks.ModelCheckpoint('./model_1217_yolo.h5', verbose=0, save_weights_only=True),
+            keras.callbacks.ModelCheckpoint('./1226_model_yolo_val1_1129.h5', verbose=0, save_weights_only=True),
         ]
 
         # Add custom callbacks to the list
@@ -1019,14 +1030,15 @@ class MaskYOLO():
             workers = multiprocessing.cpu_count()
 
         self.keras_model.fit_generator(
-            train_generator,
-            initial_epoch=self.epoch,
+            generator=train_generator,
+            steps_per_epoch=len(train_generator),
+            # initial_epoch=self.epoch,
             epochs=epochs,
-            steps_per_epoch=self.config.STEPS_PER_EPOCH,
             callbacks=callbacks,
             validation_data=val_generator,
-            validation_steps=self.config.VALIDATION_STEPS,
+            validation_steps=len(val_generator),
             max_queue_size=3,
+            verbose=1
             # workers=workers,
             # use_multiprocessing=False,
         )

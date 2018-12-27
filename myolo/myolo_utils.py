@@ -707,12 +707,12 @@ class BatchGenerator(Sequence):
                                            center_w,
                                            center_h)
 
-                    for i in range(len(self.anchors)):
-                        anchor = self.anchors[i]
+                    for j in range(0, len(self.anchors)):
+                        anchor = self.anchors[j]
                         iou = bbox_iou(shifted_box, anchor)
 
                         if max_iou < iou:
-                            best_anchor = i
+                            best_anchor = j
                             max_iou = iou
 
                     # assign ground truth x, y, w, h, confidence and class probs to y_batch
@@ -738,11 +738,11 @@ class BatchGenerator(Sequence):
                             and train_instance[2][i][3] > train_instance[2][i][1]:
                         cv2.rectangle(img, (gt_boxes[i][0], gt_boxes[i][1]),
                                       (gt_boxes[i][2], gt_boxes[i][3]),
-                                      (255, 0, 0), 3)
+                                      (255, 0, 0), 2)
                         cv2.putText(img, str(gt_class_ids[i]),
                                     (gt_boxes[i][0] + 2, gt_boxes[i][1] + 12),
                                     0, 1.2e-3 * image.shape[0],
-                                    (0, 255, 0), 2)
+                                    (0, 255, 0), 1)
 
                 batch_images[instance_count] = img
 
@@ -765,3 +765,21 @@ class BatchGenerator(Sequence):
         return inputs, outputs
 
 
+def draw_boxes(image, boxes, labels):
+    image_h, image_w, _ = image.shape
+
+    for box in boxes:
+        xmin = int(box.xmin * image_w)
+        ymin = int(box.ymin * image_h)
+        xmax = int(box.xmax * image_w)
+        ymax = int(box.ymax * image_h)
+
+        cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
+        cv2.putText(image,
+                    labels[box.get_label()] + ' ' + str(box.get_score()),
+                    (xmin, ymax - 13),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5e-3 * image_h,
+                    (0, 255, 0), 1)
+
+    return image

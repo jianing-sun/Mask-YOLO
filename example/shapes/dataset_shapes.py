@@ -18,6 +18,7 @@ class ShapesConfig(Config):
     """
     # Give the configuration a recognizable name
     NAME = "shapes"
+    LABELS = ['background', 'square', 'circle', 'triangle']
 
     # Train on 1 GPU and 8 images per GPU. We can put multiple images on each
     # GPU because the images are small. Batch size is 8 (GPUs * images/GPU).
@@ -41,10 +42,10 @@ class ShapesConfig(Config):
     TRAIN_ROIS_PER_IMAGE = 147  # 7x7x3
 
     # Use a small epoch since the data is simple
-    STEPS_PER_EPOCH = 100
+    # STEPS_PER_EPOCH = 100
 
     # use small validation steps since the epoch is small
-    VALIDATION_STEPS = 5
+    # VALIDATION_STEPS = 5
 
     USE_MINI_MASK = False
 
