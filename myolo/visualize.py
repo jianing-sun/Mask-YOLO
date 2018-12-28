@@ -81,12 +81,12 @@ def apply_mask(image, mask, color, alpha=0.5):
 
 
 def display_instances(image, boxes, masks, class_ids, class_names,
-                      scores=None, title="",
-                      figsize=(16, 16), ax=None,
+                      scores=None, save_path=None, title="",
+                      figsize=(5, 5), ax=None,
                       show_mask=True, show_bbox=True,
                       colors=None, captions=None):
     """
-    boxes: [num_instance, (x1, y1, x2, y2, class_id)] in image coordinates.
+    boxes: [num_instance, (x1, y1, x2, y2)] in image coordinates.
     masks: [height, width, num_instances]
     class_ids: [num_instances]
     class_names: list of class names of the dataset
@@ -128,7 +128,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         if not np.any(boxes[i]):
             # Skip this instance. Has no bbox. Likely lost in image cropping.
             continue
-        x1, y1, x2, y2 = boxes[i]
+        x1, y1, x2, y2 = boxes[i] * 224    # TODO
         if show_bbox:
             p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
                                 alpha=0.7, linestyle="dashed",
@@ -140,7 +140,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             class_id = class_ids[i]
             score = scores[i] if scores is not None else None
             label = class_names[class_id]
-            x = random.randint(x1, (x1 + x2) // 2)
+            # x = random.randint(x1, (x1 + x2) // 2)
             caption = "{} {:.3f}".format(label, score) if score else label
         else:
             caption = captions[i]
@@ -164,8 +164,13 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             p = Polygon(verts, facecolor="none", edgecolor=color)
             ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
-    if auto_show:
-        plt.show()
+
+    # if auto_show:
+    #     plt.show()
+
+    if save_path is not None:
+        plt.savefig(save_path)
+        # plt.savefig('./InferMaskYOLO-Shapes-Dec-28-15-22.png')
 
 
 def display_differences(image,

@@ -20,6 +20,7 @@ from keras_applications.mobilenet import _depthwise_conv_block
 from mrcnn import utils
 from pytz import timezone
 
+from myolo import visualize
 import myolo.myolo_utils as mutils
 from myolo.config import Config as config
 
@@ -1213,10 +1214,11 @@ class MaskYOLO:
         if hasattr(f, 'close'):
             f.close()
 
-    def infer_yolo(self, image, weights_dir, save_path, visualize=True):
+    def infer_yolo(self, image, weights_dir, save_path='./img_results/', display=True):
         """ decode yolo output to boxes, confidence score, class label, with visualization.
         :param image: original input image with the same image shape in config. single image. dtype=uint8
-        :param visualize: True for visualizing the yolo result on the input image
+        :param display: True for visualizing the yolo result on the input image
+        :param save_path
         """
         assert image.shape == config.IMAGE_SHAPE
         assert image.dtype == 'uint8'
@@ -1252,7 +1254,7 @@ class MaskYOLO:
         plt.imshow(image)
         plt.savefig(save_path + 'InferYOLO-' + now.strftime(fmt) + '.png')
 
-    def detect(self, image, weights_dir, visualize=True, verbose=0):
+    def detect(self, image, weights_dir, save_path='./img_results/', cs_threshold=0.4, display=True, verbose=0):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -1266,6 +1268,11 @@ class MaskYOLO:
         assert list(image.shape) == config.IMAGE_SHAPE
         assert image.dtype == 'uint8'
         assert self.mode == 'inference'
+
+        now = datetime.datetime.now()
+        tz = timezone('US/Eastern')
+        fmt = '%b-%d-%H-%M'
+        now = tz.localize(now)
 
         normed_image = image / 255.  # normalize the image to 0~1
 
@@ -1282,67 +1289,101 @@ class MaskYOLO:
 
         # test if detections align with results of yolo_output
         for detection in detections[0]:
-            if detection[4] > 0.5:
+            if detection[4] >= cs_threshold:
                 print(detection)
 
         # decode network output
-        boxes = mutils.decode_one_yolo_output(yolo_output[0],
+        yolo_boxes = mutils.decode_one_yolo_output(yolo_output[0],
                                               anchors=config.ANCHORS,
                                               nms_threshold=0.5,  # for shapes dataset this could be big
                                               obj_threshold=0.3,
                                               nb_class=config.NUM_CLASSES)
 
-        if visualize:
-            image = mutils.draw_boxes(image, boxes, labels=self.config.LABELS)
-            plt.imshow(image)
-            plt.show()
+        # if display:
+        #     image = mutils.draw_boxes(image, yolo_boxes, labels=self.config.LABELS)
+        #     plt.imshow(image)
+        #     plt.show()
 
         # Decode masks
         results = []
-        # final_rois, final_class_ids, final_scores, final_masks =\
-        #     self.unmold_detections(detections[i], mrcnn_mask[i],
-        #                            image.shape, molded_images[i].shape,
-        #                            windows[i]
+        boxes, class_ids, scores, full_masks = self.decode_masks(detections, myolo_mask, image.shape)
 
-        # bboxes = mutils.decode_one_yolo_output(yolo_output[0], config.ANCHORS, config.NUM_CLASSES)
+        top10_indices = np.argsort(scores)[::-1][:10]
+        list_to_remove = []
+        for index in top10_indices:
+            if scores[index] < cs_threshold:
+                list_to_remove.append(np.where(top10_indices == index)[0][0])
+        removed_indices = np.delete(top10_indices, list_to_remove)
 
-        detections = []
-        for box in boxes:
-            detections.append([box.xmin, box.ymin, box.xmax, box.ymax, box.get_label(), box.get_score()])
+        boxes_temp = boxes[removed_indices]
+        class_ids_temp = class_ids[removed_indices]
+        # scores = scores[removed_indices]
+        # full_masks = full_masks[removed_indices]
+
+        nmb_indices = mutils.NMB(boxes_temp, class_ids_temp, removed_indices, config.IMAGE_SHAPE)
+
+        boxes = boxes[nmb_indices]
+        class_ids = class_ids[nmb_indices]
+        scores = scores[nmb_indices]
+        full_masks = full_masks[:, :, nmb_indices]
+
+        # for i in range(0, full_masks.shape[-1]):
+        #     full_masks[:, :, i] = np.transpose(full_masks[:, :, i])
+            # full_masks[:, :, i] = np.rot90(full_masks[:, :, i], 3)
+
+            # full_masks = np.swapaxes(full_masks, 0, 1)
+
+        # full_masks[]
 
         results.append({
             "bboxes": boxes,
-            "masks": myolo_mask,
+            "class_ids": class_ids,
+            "confidence_scores": scores,
+            "full_masks": full_masks,
         })
+
+        save_path += 'InferMaskYOLO-Shapes-' + now.strftime(fmt) + '.png'
+
+        if display:
+            visualize.display_instances(image, boxes, full_masks, class_ids, config.LABELS, scores, save_path)
+
 
         return results
 
-    def decode_masks(self, yolo_proposals, myolo_mask, image_shape):
+    def decode_masks(self, detections, myolo_mask, image_shape):
         """Reformats the detections of one image from the format of the neural
         network output to a format suitable for use in the rest of the
         application.
 
-        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+        detections: [N, (x1, y1, x2, y2, score, class_id)] in normalized coordinates
         mrcnn_mask: [N, height, width, num_classes]
-        original_image_shape: [H, W, C] Original image shape before resizing
-        image_shape: [H, W, C] Shape of the image after resizing and padding
+        image_shape: [H, W, C] Shape of the image (no resizing or padding for now)
 
         Returns:
-        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+        boxes: [N, (x1, y1, x2, y2)] Bounding boxes in pixels
         class_ids: [N] Integer class IDs for each bounding box
         scores: [N] Float probability scores of the class_id
         masks: [height, width, num_instances] Instance masks
         """
+
+        assert len(detections) == 1    # only detect for one image per time
+        assert len(myolo_mask) == 1
+        assert list(image_shape) == config.IMAGE_SHAPE
+
         # How many detections do we have?
         # Detections array is padded with zeros. Find the first class_id == 0.
         # zero_ix = np.where(detections[:, 4] == 0)[0]
         # N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
-        N = len(yolo_proposals)
+
+        detection = detections[0]
+        myolo_mask = myolo_mask[0]
+        N = len(detection)
 
         # Extract boxes, class_ids, scores, and class-specific masks
-        boxes = yolo_proposals[:N, :4]
-        class_ids = yolo_proposals[:N, 4].astype(np.int32)
-        scores = yolo_proposals[:N, 5]
+        boxes = detection[:N, :4]
+        scores = detection[:N, 4]
+        class_ids = detection[:N, 5].astype(np.int32)
+
         masks = myolo_mask[np.arange(N), :, :, class_ids]
 
         # Translate normalized coordinates in the resized image to pixel
