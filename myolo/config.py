@@ -22,6 +22,7 @@ class Config(object):
     NUM_CLASSES = 1 + 3     # Override in sub-classes
     # ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
     ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
+    LABELS = ['background', 'square', 'circle', 'triangle']
 
     N_BOX = 3
     GRID_H, GRID_W = 7, 7

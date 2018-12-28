@@ -20,7 +20,10 @@ dataset_val = ShapesDataset()
 dataset_val.load_shapes(100, config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1])
 dataset_val.prepare()
 
-model = modellib.MaskYOLO(mode="yolo", config=config)
+model = modellib.MaskYOLO(mode="training",
+                          config=config,
+                          yolo_pretrain_dir=None,
+                          yolo_trainable=True)
 model.load_weights('./1226_model_yolo_val1_1129.h5')
 model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=5, layers='all')
 
