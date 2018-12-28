@@ -870,10 +870,10 @@ class MaskYOLO:
             for layer in model.layers:
                 layer.trainable = self.yolo_trainable
 
-        # yolo_rois = batch_yolo_decode(yolo_output, feature_map_shape, config)
-        yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
+        # yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
 
         if mode == "training":
+            yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
             rois, target_class_ids, dummy, target_mask = \
                 DetectMaskTargetLayer(config, name="detect_mask_targets")([
                     yolo_proposals, input_gt_class_ids, gt_boxes, input_gt_masks])
@@ -937,16 +937,15 @@ class MaskYOLO:
 
             # Create masks for detections
             # detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
+            detections = DetectionsLayer(name="decode_yolo_layer", config=config)([yolo_output])
+            detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
 
-            # detections = DetectionLayer(config, name="mrcnn_detection")(
-            #     [yolo_proposals])
-
-            myolo_mask = build_mask_graph(yolo_proposals, [myolo_feature_maps],
+            myolo_mask = build_mask_graph(detection_boxes, [myolo_feature_maps],
                                           config.MASK_POOL_SIZE,
                                           config.NUM_CLASSES)
 
             inputs = [input_image, input_true_boxes]
-            outputs = [yolo_output, yolo_proposals, myolo_mask]
+            outputs = [yolo_output, detections, myolo_mask]
 
             model = KM.Model(inputs, outputs, name="mask_yolo_inference")
             # model = KM.Model([input_image, input_true_boxes],
@@ -1253,7 +1252,7 @@ class MaskYOLO:
         plt.imshow(image)
         plt.savefig(save_path + 'InferYOLO-' + now.strftime(fmt) + '.png')
 
-    def detect(self, image, weights_dir, verbose=0):
+    def detect(self, image, weights_dir, visualize=True, verbose=0):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -1264,21 +1263,27 @@ class MaskYOLO:
         scores: [N] float probability scores for the class IDs
         masks: [H, W, N] instance binary masks
         """
-        assert image.shape == config.IMAGE_SHAPE
+        assert list(image.shape) == config.IMAGE_SHAPE
         assert image.dtype == 'uint8'
         assert self.mode == 'inference'
 
-        image /= 255.  # normalize the image to 0~1
+        normed_image = image / 255.  # normalize the image to 0~1
 
         # form the inputs as model required
-        image = np.expand_dims(image, axis=0)
+        normed_image = np.expand_dims(normed_image, axis=0)
         dummy_true_boxes = np.zeros((1, 1, 1, 1, config.TRUE_BOX_BUFFER, 4))
 
         # load weights
         self.load_weights(weights_dir)
 
         # model predict for single input image
-        yolo_output, yolo_proposals, myolo_mask = self.keras_model.predict([image, dummy_true_boxes])
+        config.BATCH_SIZE = 1
+        yolo_output, detections, myolo_mask = self.keras_model.predict([normed_image, dummy_true_boxes], verbose=0)
+
+        # test if detections align with results of yolo_output
+        for detection in detections[0]:
+            if detection[4] > 0.5:
+                print(detection)
 
         # decode network output
         boxes = mutils.decode_one_yolo_output(yolo_output[0],
@@ -1286,6 +1291,11 @@ class MaskYOLO:
                                               nms_threshold=0.5,  # for shapes dataset this could be big
                                               obj_threshold=0.3,
                                               nb_class=config.NUM_CLASSES)
+
+        if visualize:
+            image = mutils.draw_boxes(image, boxes, labels=self.config.LABELS)
+            plt.imshow(image)
+            plt.show()
 
         # Decode masks
         results = []
@@ -1404,7 +1414,7 @@ class DecodeYOLOLayer(KE.Layer):
     Here we decode the YOLO output, convert bx, by, tw, th to x1, y1, x2, y2
     in normalized form (0-1).
     decode yolo output array to boxes with normalized coordinates
-    inputs[0]: shape=[None, 7, 7, 3, 8]
+    inputs[0]: shape=[None, 7, 7, 3, 9]
     :return output_boxes with shape [None, 7x7x3, 4] last axis contains
     [xmin, ymin, xmax, ymax]
     """
@@ -1450,6 +1460,71 @@ class DecodeYOLOLayer(KE.Layer):
 
     def compute_output_shape(self, input_shape):
         return (None, input_shape[1] * input_shape[2] * input_shape[3], 4)
+
+
+class DetectionsLayer(KE.Layer):
+    """ DetectionsLayer: similar to the idea of 'ProposalLayer' in Mask-RCNN.
+    inputs[0] is the output of YOLO last layer with shape [None, 7, 7, 3, 8]
+    Here we decode the YOLO output, convert bx, by, tw, th to x1, y1, x2, y2
+    in normalized form (0-1).
+    decode yolo output array to boxes with normalized coordinates
+    inputs[0]: shape=[None, 7, 7, 3, 9]
+    :return output_boxes with shape [None, 7x7x3, 4] last axis contains
+    [xmin, ymin, xmax, ymax]
+    """
+    def __init__(self, config, **kwargs):
+        super(DetectionsLayer, self).__init__(**kwargs)
+        self.config = config
+
+    def call(self, inputs):
+        y_pred = inputs[0]
+        # mask_shape = tf.shape(y_pred)[:4]
+        # grid_w, grid_h = mask_shape[1], mask_shape[2]
+
+        cell_x = tf.to_float(
+            tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
+        cell_y = tf.transpose(cell_x, (0, 2, 1, 3, 4))
+
+        cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
+
+        """ Adjust prediction """
+        # adjust x and y
+        pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
+        pred_box_xy = pred_box_xy / tf.cast(config.GRID_W, tf.float32)
+        # adjust w and h
+        pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
+        pred_box_wh = pred_box_wh / tf.cast(config.GRID_W, tf.float32)    # normalize
+
+        """ get x, y coordinates """
+        # pred_xy = tf.expand_dims(pred_box_xy, 4)
+        # pred_wh = tf.expand_dims(pred_box_wh, 4)
+
+        pred_wh_half = pred_box_wh / 2.
+        pred_mins = pred_box_xy - pred_wh_half
+        pred_maxes = pred_box_xy + pred_wh_half
+
+        # xmin, ymin, xmax, ymax
+        # output_boxes = tf.concat([pred_mins, pred_maxes], axis=-1)
+        #
+        # output_boxes = tf.reshape(output_boxes, [-1,
+        #                                          output_boxes.shape[1] * output_boxes.shape[2] * output_boxes.shape[3],
+        #                                          output_boxes.shape[-1]])
+
+        pred_box_conf = tf.sigmoid(y_pred[..., 4])
+        pred_box_conf = tf.expand_dims(pred_box_conf, axis=-1)
+
+        pred_box_class = tf.argmax(y_pred[..., 5:], axis=-1)
+        pred_box_class = tf.expand_dims(tf.to_float(pred_box_class), axis=-1)
+
+        detections = tf.concat([pred_mins, pred_maxes, pred_box_conf, pred_box_class], axis=-1)
+        detections = tf.reshape(detections, [-1,
+                                             detections.shape[1] * detections.shape[2] * detections.shape[3],
+                                             detections.shape[-1]])
+
+        return detections
+
+    def compute_output_shape(self, input_shape):
+        return (None, input_shape[1] * input_shape[2] * input_shape[3], 4 + 1 + 1)
 
 
 

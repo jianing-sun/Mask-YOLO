@@ -20,12 +20,20 @@ dataset_val = ShapesDataset()
 dataset_val.load_shapes(100, config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1])
 dataset_val.prepare()
 
-model = modellib.MaskYOLO(mode="training",
+image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=440, augment=None,
+                                                               augmentation=None,
+                                                               use_mini_mask=config.USE_MINI_MASK)
+config.BATCH_SIZE = 1
+
+model = modellib.MaskYOLO(mode="inference",
                           config=config,
                           yolo_pretrain_dir=None,
                           yolo_trainable=True)
-model.load_weights('./1226_model_yolo_val1_1129.h5')
-model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=5, layers='all')
+# model.load_weights('./saved_model_Dec27-14-43.h5')
+
+
+model.detect(image, './saved_model_Dec27-14-43.h5')
+# model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=5, layers='all')
 
 
 # image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=440, augment=None,
