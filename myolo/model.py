@@ -83,7 +83,7 @@ def mobilenet_graph(input_image, architecture, stage5=False, alpha=1.0, depth_mu
 # YOLO custom loss function
 ############################################################
 
-def yolo_custom_loss(y_true, y_pred, true_boxes):
+def yolo_custom_loss(y_true, y_pred, true_boxes):   # TODO, add config as an input
     mask_shape = tf.shape(y_true)[:4]  # shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES]
 
     cell_x = tf.to_float(
@@ -415,7 +415,7 @@ class PyramidROIAlign(KE.Layer):
 
 
 ############################################################
-#  Detection Target Layer
+#  Detection Mask Target Layer
 ############################################################
 
 def overlaps_graph(boxes1, boxes2):
@@ -479,18 +479,17 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
     # Assertions
     asserts = [
         tf.Assert(tf.greater(tf.shape(yolo_proposals)[0], 0), [yolo_proposals],
-                  name="roi_assertion"),
+                  name='yolo_proposals_assertion'),
     ]
     with tf.control_dependencies(asserts):
         yolo_proposals = tf.identity(yolo_proposals)
 
     # Remove zero padding
-    # proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
-    gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
+    gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name='trim_gt_boxes')
     gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
-                                   name="trim_gt_class_ids")
+                                   name='trim_gt_class_ids')
     gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
-                         name="trim_gt_masks")
+                         name='trim_gt_masks')
 
     # Handle COCO crowds
     # A crowd box in COCO is a bounding box around several instances. Exclude
@@ -503,7 +502,7 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
     # gt_boxes = tf.gather(gt_boxes, non_crowd_ix)
     # gt_masks = tf.gather(gt_masks, non_crowd_ix, axis=2)
 
-    # Compute overlaps matrix [proposals, gt_boxes]
+    # Compute overlaps matrix [proposals, gt_boxes] both normalized
     overlaps = overlaps_graph(yolo_proposals, gt_boxes)
 
     # Compute overlaps with crowd boxes [proposals, crowd_boxes]
@@ -543,7 +542,7 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
         true_fn=lambda: tf.argmax(positive_overlaps, axis=1),
         false_fn=lambda: tf.cast(tf.constant([]), tf.int64)
     )
-    roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
+    # roi_gt_boxes = tf.gather(gt_boxes, roi_gt_box_assignment)
     roi_gt_class_ids = tf.gather(gt_class_ids, roi_gt_box_assignment)
 
     # Compute bbox refinement for positive ROIs
@@ -551,14 +550,14 @@ def detect_mask_target_graph(yolo_proposals, gt_class_ids, gt_boxes, gt_masks, c
     # deltas /= config.BBOX_STD_DEV
 
     # Assign positive ROIs to GT masks
-    # Permute masks to [N, height, width, 1]
+    # Permute masks to [N, height, width, 1] (put #instance axis first)
     transposed_masks = tf.expand_dims(tf.transpose(gt_masks, [2, 0, 1]), -1)
     # Pick the right mask for each ROI
     roi_masks = tf.gather(transposed_masks, roi_gt_box_assignment)
 
     # Compute mask targets
     x1, y1, x2, y2 = tf.split(positive_rois, 4, axis=1)
-    boxes = tf.concat([y1, x1, y2, x2], axis=1)     # tf.image.crop_and_resize required
+    boxes = tf.concat([y1, x1, y2, x2], axis=1)     # tf.image.crop_and_resize required this order
     # boxes = positive_rois
 
     # TODO: correct this
@@ -609,7 +608,7 @@ class DetectMaskTargetLayer(KE.Layer):
     to yolo_rois
 
     Inputs:
-    yolo_rois: [batch, N, (x1, y1, x2, y2)] in normalized coordinates.
+    yolo_proposals: [batch, N, (x1, y1, x2, y2)] in normalized coordinates.
                 No zero padding
     gt_class_ids: [batch, MAX_GT_INSTANCES] Integer class IDs.
     gt_boxes: [batch, MAX_GT_INSTANCES, (x1, y1, x2, y2)] in normalized
@@ -617,18 +616,19 @@ class DetectMaskTargetLayer(KE.Layer):
     gt_masks: [batch, height, width, MAX_GT_INSTANCES] of boolean type
 
     Returns: Target ROIs and corresponding class IDs, bounding box shifts,
-    and masks.
-    rois: [batch, N, (x1, y1, x2, y2)] in normalized coordinates
+    and masks.  N = config.TRAIN_ROIS_PER_IMAGE
+    rois: [batch, N, (x1, y1, x2, y2)] in normalized coordinates with both
+    positive and negative (at behind).
     target_class_ids: [batch, N]. Integer class IDs.
-    # target_deltas: [batch, N, (dy, dx, log(dh), log(dw)] used to compute
-    box loss in Mask-RCNN but here it's been included in YOLO loss
-    target_mask: [batch, N, height, width]
+    dummy: we don't use target_boxes to compute the any loss (but we do
+    use target_ids to ignore background boxes when computing mask loss).
+    so here I put it as 0 as it's useless.
+    target_mask: [batch, N, height, width] TODO or [N, width, height]?
                  Masks cropped to bbox boundaries and resized to neural
                  network output size.
 
-    Note: Returned arrays might be zero padded if not enough target ROIs.
+    Note: Returned arrays have been zero padded if not enough target ROIs.
     """
-
     def __init__(self, config, **kwargs):
         super(DetectMaskTargetLayer, self).__init__(**kwargs)
         self.config = config
@@ -641,7 +641,7 @@ class DetectMaskTargetLayer(KE.Layer):
 
         # Slice the batch and run a graph for each slice
         # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["yolo_proposals", "target_class_ids", "target_bbox", "target_mask"]
+        names = ['yolo_proposals', 'target_class_ids', 'target_bbox', 'target_mask']
         outputs = utils.batch_slice(
             [proposals, gt_class_ids, gt_boxes, gt_masks],
             lambda w, x, y, z: detect_mask_target_graph(
@@ -653,7 +653,7 @@ class DetectMaskTargetLayer(KE.Layer):
         return [
             (None, input_shape[0][1], 4),  # rois
             (None, input_shape[0][1]),  # class_ids
-            (None, None),  # dummy
+            (None, None),               # dummy
             (None, input_shape[0][1], self.config.MASK_SHAPE[0],
              self.config.MASK_SHAPE[1])  # masks
         ]
@@ -665,7 +665,6 @@ class DetectMaskTargetLayer(KE.Layer):
 ############################################################
 #  Mask Graph
 ############################################################
-
 
 def build_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=False):
     """Builds the computation graph of the mask head of Feature Pyramid Network.
@@ -684,7 +683,7 @@ def build_mask_graph(rois, feature_maps, pool_size, num_classes, train_bn=False)
     # ROI Pooling
     # Shape: [batch, num_rois, MASK_POOL_SIZE, MASK_POOL_SIZE, channels]
     x = PyramidROIAlign([pool_size, pool_size],
-                        name="roi_align_mask")([rois] + feature_maps)  # [8, ?, 14, 14, 515122]
+                        name="roi_align_mask")([rois] + feature_maps)  # [8, ?, 14, 14, 256]
 
     # Conv layers
     x = KL.TimeDistributed(KL.Conv2D(256, (3, 3), padding="same"),
@@ -760,7 +759,6 @@ def myolo_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 # Mask YOLO class
 ############################################################
 
-
 class MaskYOLO:
     """ Build the overall structure of MaskYOLO class
     which generate bbox and class label on the YOLO side based on that then added with a Mask branch
@@ -791,33 +789,32 @@ class MaskYOLO:
         assert mode in ['training', 'inference', 'yolo']
 
         # TODO: make constraints on input image size
-        # h, w = config.IMAGE_SHAPE[:2]
-        # if h / 2 ** 6 != int(h / 2 ** 6) or w / 2 ** 6 != int(w / 2 ** 6):
-        #     raise Exception("Image size must be dividable by 2 at least 6 times "
-        #                     "to avoid fractions when downscaling and upscaling."
-        #                     "For example, use 256, 320, 384, 448, 512, ... etc. ")
+        w, h = config.IMAGE_SHAPE[:2]
+        if w % 32 != 0 or h % 32 != 0:
+            raise Exception("Image size must be dividable by 32 to adapt with YOLO framework. "
+                            "For example, use 224, 256, 288, 320, 356, ... etc. ")
 
         # input image -> KL.Input
-        # common input for both modes
-        input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+        # common input for all modes
+        input_image = KL.Input(shape=[None, None, config.IMAGE_SHAPE[2]], name='input_image')
 
-        if mode == "training":
+        if mode == 'training':
             # input_yolo_anchors and true_boxes
-            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name='input_true_boxes')
             input_yolo_target = KL.Input(
                 shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
-                name="input_yolo_target", dtype=tf.float32)
+                name='input_yolo_target', dtype=tf.float32)
 
             # Detection GT (class IDs, bounding boxes, and masks)
 
             # 1. GT Class IDs (zero padded)
             input_gt_class_ids = KL.Input(
-                shape=[None], name="input_gt_class_ids", dtype=tf.int32)
+                shape=[None], name='input_gt_class_ids', dtype=tf.int32)
 
             # 2. GT Boxes in pixels (zero padded)
             # [batch, MAX_GT_INSTANCES, (y1, x1, y2, x2)] in image coordinates
             input_gt_boxes = KL.Input(
-                shape=[None, 4], name="input_gt_boxes", dtype=tf.float32)
+                shape=[None, 4], name='input_gt_boxes', dtype=tf.float32)
 
             # Normalize box coordinates (divide by the image width and height)
             gt_boxes = KL.Lambda(lambda x: norm_boxes_graph(
@@ -827,36 +824,36 @@ class MaskYOLO:
             if config.USE_MINI_MASK:
                 input_gt_masks = KL.Input(shape=[config.MINI_MASK_SHAPE[0],
                                                  config.MINI_MASK_SHAPE[1], None],
-                                          name="input_gt_masks", dtype=bool)
+                                          name='input_gt_masks', dtype=bool)
             else:
                 input_gt_masks = KL.Input(shape=[config.IMAGE_SHAPE[0],
                                                  config.IMAGE_SHAPE[1], None],
-                                          name="input_gt_masks", dtype=bool)
+                                          name='input_gt_masks', dtype=bool)
 
-        elif mode == "inference":
-            # required input for YOLO model
-            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
+        elif mode == 'inference':
+            # true_boxes, used to compute yolo_sum_loss   TODO, useless in inference, remove it later
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name='input_true_boxes')
 
-        elif mode == "yolo":
-
-            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name="input_true_boxes")
-
+        elif mode == 'yolo':
+            # true_boxes, used to compute yolo_sum_loss
+            input_true_boxes = KL.Input(shape=(1, 1, 1, config.TRUE_BOX_BUFFER, 4), name='input_true_boxes')
+            # y_true, used to compute yolo_sum_loss
             input_yolo_target = KL.Input(
                 shape=[config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES],
-                name="input_yolo_target", dtype=tf.float32)
+                name='input_yolo_target', dtype=tf.float32)
 
         C4 = mobilenet_graph(input_image, config.BACKBONE, stage5=False)
         # C4 = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="fpn_p2")(C4)
-        # myolo_feature_maps = C4
-        myolo_feature_maps = KL.Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (3, 3), padding="SAME", name="feature_map")(C4)
 
-        # build YOLO branch graph
-        yolo_model = build_yolo_model(config, config.TOP_DOWN_PYRAMID_SIZE*2)
-        # yolo_output = yolo_model([myolo_feature_maps, input_true_boxes])
+        # decrease the depth of myolo_feature_map to make the network smaller
+        myolo_feature_maps = KL.Conv2D(config.TOP_FEATURE_MAP_DEPTH, (3, 3), padding='SAME', name='feature_map')(C4)
+
+        # build second phase of YOLO branch graph
+        yolo_model = build_yolo_model(config, config.SECOND_PHASE_YOLO_DEPTH)
         yolo_output = yolo_model([C4])
 
         if self.yolo_pretrain_dir is not None:
-
+            # load with pretrained yolo branch weights
             print('\nloading pretrained yolo weights --- \n')
 
             # YOLO Model
@@ -864,7 +861,7 @@ class MaskYOLO:
 
             outputs = [yolo_output]
 
-            model = KM.Model(inputs, outputs, name="whole_yolo_branch")
+            model = KM.Model(inputs, outputs, name='whole_yolo_branch')
             model.load_weights(self.yolo_pretrain_dir)
 
             print('set the trainable of layers in the whole yolo branch as ' + str(self.yolo_trainable) + '\n')
@@ -873,10 +870,12 @@ class MaskYOLO:
 
         # yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
 
-        if mode == "training":
+        if mode == 'training':
+
             yolo_proposals = DecodeYOLOLayer(name='decode_yolo_layer', config=config)([yolo_output])
-            rois, target_class_ids, dummy, target_mask = \
-                DetectMaskTargetLayer(config, name="detect_mask_targets")([
+
+            rois, target_class_ids, _, target_mask = \
+                DetectMaskTargetLayer(config, name='detect_mask_targets')([
                     yolo_proposals, input_gt_class_ids, gt_boxes, input_gt_masks])
 
             myolo_mask = build_mask_graph(rois, [myolo_feature_maps],
@@ -887,11 +886,11 @@ class MaskYOLO:
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
             # 1. YOLO custom loss (bbox loss and binary classification loss)
-            yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
+            yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name='yolo_sum_loss')(
                 [input_yolo_target, yolo_output, input_true_boxes])
 
             # 2. Mask loss
-            mask_loss = KL.Lambda(lambda x: myolo_mask_loss_graph(*x), name="myolo_mask_loss")(
+            mask_loss = KL.Lambda(lambda x: myolo_mask_loss_graph(*x), name='myolo_mask_loss')(
                 [target_mask, target_class_ids, myolo_mask])
 
             # Model
@@ -900,16 +899,16 @@ class MaskYOLO:
 
             outputs = [yolo_output, yolo_proposals, output_rois, myolo_mask, yolo_sum_loss, mask_loss]
 
-            model = KM.Model(inputs, outputs, name="mask+yolo")
+            model = KM.Model(inputs, outputs, name='mask+yolo')
 
             print('\nyolo+mask model summary: \n')
             print(model.summary())
 
         elif mode == "yolo":
 
-            # 1. YOLO custom loss (bbox loss and binary classification loss)
+            # YOLO custom loss (bbox loss and binary classification loss)
             yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
-                [input_yolo_target, yolo_output, input_true_boxes])
+                [input_yolo_target, yolo_output, input_true_boxes, config])
 
             # Model
             inputs = [input_image, input_true_boxes, input_yolo_target]
@@ -922,22 +921,9 @@ class MaskYOLO:
             print(model.summary())
 
         elif mode == "inference":
+
             # Network Heads
-            # Proposal classifier and BBox regressor heads
-            # mrcnn_class_logits, mrcnn_class, mrcnn_bbox = \
-            #     fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
-            #                          config.POOL_SIZE, config.NUM_CLASSES,
-            #                          train_bn=config.TRAIN_BN,
-            #                          fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
-
-            # Detections
-            # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in
-            # normalized coordinates
-            # detections = DetectionLayer(config, name="mrcnn_detection")(
-            #     [rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
-
             # Create masks for detections
-            # detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
             detections = DetectionsLayer(name="decode_yolo_layer", config=config)([yolo_output])
             detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
 
@@ -949,10 +935,6 @@ class MaskYOLO:
             outputs = [yolo_output, detections, myolo_mask]
 
             model = KM.Model(inputs, outputs, name="mask_yolo_inference")
-            # model = KM.Model([input_image, input_true_boxes],
-            #                  [detections, mrcnn_class, mrcnn_bbox,
-            #                   mrcnn_mask, rpn_rois, rpn_class, rpn_bbox],
-            #                  name='mask_rcnn')
 
         else:
             raise NotImplementedError
@@ -1329,11 +1311,7 @@ class MaskYOLO:
 
         # for i in range(0, full_masks.shape[-1]):
         #     full_masks[:, :, i] = np.transpose(full_masks[:, :, i])
-            # full_masks[:, :, i] = np.rot90(full_masks[:, :, i], 3)
-
-            # full_masks = np.swapaxes(full_masks, 0, 1)
-
-        # full_masks[]
+        #     full_masks[:, :, i] = np.rot90(full_masks[:, :, i], 3)
 
         results.append({
             "bboxes": boxes,
@@ -1346,7 +1324,6 @@ class MaskYOLO:
 
         if display:
             visualize.display_instances(image, boxes, full_masks, class_ids, config.LABELS, scores, save_path)
-
 
         return results
 
@@ -1417,7 +1394,7 @@ class MaskYOLO:
 def norm_boxes_graph(boxes, shape):
     """Converts boxes from pixel coordinates to normalized coordinates.
     boxes: [..., (x1, y1, x2, y2)] in pixel coordinates
-    shape: [..., (height, width)] in pixels
+    shape: [..., (width, height)] in pixels
 
     Note: In pixel coordinates (x2, y2) is outside the box. But in normalized
     coordinates it's inside the box.
@@ -1425,7 +1402,7 @@ def norm_boxes_graph(boxes, shape):
     Returns:
         [..., (x1, y1, x2, y2)] in normalized coordinates
     """
-    h, w = tf.split(tf.cast(shape, tf.float32), 2)
+    w, h = tf.split(tf.cast(shape, tf.float32), 2)
     scale = tf.concat([w, h, w, h], axis=-1) - tf.constant(1.0)
     shift = tf.constant([0., 0., 1., 1.])
     return tf.divide(boxes - shift, scale)
@@ -1446,18 +1423,17 @@ def trim_zeros_graph(boxes, name='trim_zeros'):
 ############################################################
 # Decode YOLO output to final bbox
 # (equivalent to ProposalLayer + DetectionTargetLayer)
+# in original MASK_RCNN code
 ############################################################
-
 
 class DecodeYOLOLayer(KE.Layer):
     """ DecodeYOLOLayer: similar to the idea of 'ProposalLayer' in Mask-RCNN.
-    inputs[0] is the output of YOLO last layer with shape [None, 7, 7, 3, 8]
-    Here we decode the YOLO output, convert bx, by, tw, th to x1, y1, x2, y2
-    in normalized form (0-1).
+    inputs[0] is the output of YOLO last layer with shape for example, [None, 7, 7, 3, 9]
+    Here we decode the YOLO output, convert tx, ty, tw, th to x1, y1, x2, y2
+    in normalized form (0~1).
     decode yolo output array to boxes with normalized coordinates
-    inputs[0]: shape=[None, 7, 7, 3, 9]
-    :return output_boxes with shape [None, 7x7x3, 4] last axis contains
-    [xmin, ymin, xmax, ymax]
+    inputs[0]: e.g. shape=[None, 7, 7, 3, 9], depends on the N_BOXES and NUM_CLASSES
+    :return output_boxes with shape e.g. [None, 7x7x3, 4] last axis is [xmin, ymin, xmax, ymax]
     """
     def __init__(self, config, **kwargs):
         super(DecodeYOLOLayer, self).__init__(**kwargs)
@@ -1465,8 +1441,6 @@ class DecodeYOLOLayer(KE.Layer):
 
     def call(self, inputs):
         y_pred = inputs[0]
-        # mask_shape = tf.shape(y_pred)[:4]
-        # grid_w, grid_h = mask_shape[1], mask_shape[2]
 
         cell_x = tf.to_float(
             tf.reshape(tf.tile(tf.range(config.GRID_W), [config.GRID_H]), (1, config.GRID_H, config.GRID_W, 1, 1)))
@@ -1474,23 +1448,22 @@ class DecodeYOLOLayer(KE.Layer):
 
         cell_grid = tf.tile(tf.concat([cell_x, cell_y], -1), [config.BATCH_SIZE, 1, 1, config.N_BOX, 1])
 
-        """ Adjust prediction """
-        # adjust x and y
+        # compute x and y based on YOLOv2 paper formula:
+        # x, y = sigma(tx) + cell_grid, sigma(ty) + cell_grid
         pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
-        pred_box_xy = pred_box_xy / tf.cast(config.GRID_W, tf.float32)
-        # adjust w and h
+        pred_box_xy = pred_box_xy / tf.cast(config.GRID_W, tf.float32)    # normalize to 0~1
+
+        # compute w and h based on YOLOv2 paper formula:
+        # w, h = prior_width (anchor widths) * exp(tw), prior_height (anchor heights) * exp(th)
         pred_box_wh = tf.exp(y_pred[..., 2:4]) * np.reshape(config.ANCHORS, [1, 1, 1, config.N_BOX, 2])
         pred_box_wh = pred_box_wh / tf.cast(config.GRID_W, tf.float32)    # normalize
 
-        """ get x, y coordinates """
-        # pred_xy = tf.expand_dims(pred_box_xy, 4)
-        # pred_wh = tf.expand_dims(pred_box_wh, 4)
-
+        # get diagonal coordinates, xmin, ymin, xmax, ymax
         pred_wh_half = pred_box_wh / 2.
         pred_mins = pred_box_xy - pred_wh_half
         pred_maxes = pred_box_xy + pred_wh_half
 
-        # xmin, ymin, xmax, ymax
+        # concatenate and reshape
         output_boxes = tf.concat([pred_mins, pred_maxes], axis=-1)
 
         output_boxes = tf.reshape(output_boxes, [-1,

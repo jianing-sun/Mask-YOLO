@@ -730,7 +730,6 @@ class BatchGenerator(Sequence):
                 gt_boxes = gt_boxes[ids]
                 gt_masks = gt_masks[:, :, ids]
 
-
             ### YOLO
             true_box_index = 0
             for i in range(0, gt_boxes.shape[0]):
@@ -864,7 +863,7 @@ def unmold_mask(mask, bbox, image_shape):
     y1 = min(max(0, int(y1 * h)), h)
     y2 = min(max(1, int(y2 * h)), h)
 
-    print('x2-x1, y2-y2', (max(1, x2 - x1), max(1, y2 - y1)))
+    # print('x2-x1, y2-y2', (max(1, x2 - x1), max(1, y2 - y1)))
     mask = resize(mask, (max(1, y2 - y1), max(1, x2 - x1)))
     # mask = resize(mask, (max(1, x2 - x1), max(1, y2 - y1)))
     mask = np.where(mask >= threshold, 1, 0).astype(np.bool)

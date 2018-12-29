@@ -39,7 +39,7 @@ class ShapesConfig(Config):
     ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
     # Reduce training ROIs per image because the images are small and have
     # few objects. Aim to allow ROI sampling to pick 33% positive ROIs.
-    TRAIN_ROIS_PER_IMAGE = 147  # 7x7x3
+    TRAIN_ROIS_PER_IMAGE = Config.GRID_H * Config.GRID_W * Config.N_BOX
 
     # Use a small epoch since the data is simple
     # STEPS_PER_EPOCH = 100

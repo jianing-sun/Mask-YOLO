@@ -27,7 +27,7 @@ class Config(object):
     N_BOX = 3
     GRID_H, GRID_W = 7, 7
     TRUE_BOX_BUFFER = 15
-    BATCH_SIZE = 1
+    BATCH_SIZE = 16
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
@@ -47,7 +47,7 @@ class Config(object):
     # handle 2 images of 1024x1024px.
     # Adjust based on your GPU memory and image sizes. Use the highest
     # number that your GPU can handle for best performance.
-    IMAGES_PER_GPU = 2
+    IMAGES_PER_GPU = BATCH_SIZE / GPU_COUNT
 
     # Number of training steps per epoch
     # This doesn't need to match the size of the training set. Tensorboard
@@ -84,8 +84,9 @@ class Config(object):
     FPN_CLASSIF_FC_LAYERS_SIZE = 1024
 
     # Size of the top-down layers used to build the feature pyramid
-    TOP_DOWN_PYRAMID_SIZE = 256
-    TOP_FEATURE_MAP_DEPTH = 512
+    # TOP_DOWN_PYRAMID_SIZE = 256
+    TOP_FEATURE_MAP_DEPTH = 256
+    SECOND_PHASE_YOLO_DEPTH = 512
 
     # Length of square anchor side in pixels
     RPN_ANCHOR_SCALES = (32, 64, 128, 256, 512)
@@ -159,7 +160,7 @@ class Config(object):
     # enough positive proposals to fill this and keep a positive:negative
     # ratio of 1:3. You can increase the number of proposals by adjusting
     # the RPN NMS threshold.
-    TRAIN_ROIS_PER_IMAGE = 147
+    TRAIN_ROIS_PER_IMAGE = GRID_H * GRID_W * N_BOX
 
     # Percent of positive ROIs used to train classifier/mask heads
     # ROI_POSITIVE_RATIO = 0.33
