@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import scipy
 from mrcnn import utils
 import random
 import logging
@@ -243,11 +244,6 @@ def _interval_overlap(interval_a, interval_b):
             return min(x2, x4) - x3
 
 
-############################################################
-#  Data Generator
-############################################################
-
-
 def extract_bboxes(mask):
     """Compute bounding boxes from masks.
     mask: [height, width, num_instances]. Mask pixels are either 1 or 0.
@@ -302,14 +298,10 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
     # Load image and mask
     image = dataset.load_image(image_id)
     mask, class_ids = dataset.load_mask(image_id)
+    network_image_shape = config.IMAGE_SHAPE
     original_shape = image.shape
-    image, window, scale, padding, crop = utils.resize_image(
-        image,
-        min_dim=config.IMAGE_MIN_DIM,
-        min_scale=config.IMAGE_MIN_SCALE,
-        max_dim=config.IMAGE_MAX_DIM,
-        mode=config.IMAGE_RESIZE_MODE)
-    mask = utils.resize_mask(mask, scale, padding, crop)
+    image, scale = resize_image(image, network_image_shape)
+    mask = resize_mask(mask, scale)
 
     # Random horizontal flips.
     # TODO: will be removed in a future update in favor of augmentation
@@ -372,6 +364,50 @@ def load_image_gt(dataset, config, image_id, augment=False, augmentation=None,
         mask = minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
 
     return image, class_ids, bbox, mask
+
+
+def resize_image(image, net_image_shape):
+    """Resizes an image keeping the aspect ratio changed.
+
+    Returns:
+    image: the resized image
+    scale: The scale factor used to resize the image
+    """
+    # Keep track of image dtype and return results in the same dtype
+    image_dtype = image.dtype
+    # Default window (x1, y1, x2, y2) and default scale == 1.
+    h, w = image.shape[:2]
+    scale = [1, 1]
+
+    # Scale
+    scale[0], scale[1] = net_image_shape[0] / h, net_image_shape[1] / w
+
+    # Resize image using bilinear interpolation
+    if scale != [1, 1]:
+        image = resize(image, (round(h * scale[0]), round(w * scale[1])),
+                       preserve_range=True)
+
+    return image.astype(image_dtype), scale
+
+
+def resize_mask(mask, scale):
+    """Resizes a mask using the given scale and padding.
+    Typically, you get the scale and padding from resize_image() to
+    ensure both, the image and the mask, are resized consistently.
+
+    scale: mask scaling factor
+    padding: Padding to add to the mask in the form
+            [(top, bottom), (left, right), (0, 0)]
+    """
+    # Suppress warning from scipy 0.13.0, the output shape of zoom() is
+    # calculated with round() instead of int()
+    mask = scipy.ndimage.zoom(mask, zoom=[scale[0], scale[1], 1], order=0)
+    # if crop is not None:
+    #     y, x, h, w = crop
+    #     mask = mask[y:y + h, x:x + w]
+    # else:
+    #     mask = np.pad(mask, padding, mode='constant', constant_values=0)
+    return mask
 
 
 def minimize_mask(bbox, mask, mini_shape):
@@ -694,7 +730,7 @@ class BatchGenerator(Sequence):
 
         if r_bound > len(self.all_info):
             r_bound = len(self.all_info)
-            l_bound = r_bound - self.config.BATCH_SIZE
+            l_bound = max(0, r_bound - self.config.BATCH_SIZE)
 
         instance_count = 0
 
@@ -874,3 +910,17 @@ def unmold_mask(mask, bbox, image_shape):
     full_mask[y1:y2, x1:x2] = mask
     # full_mask[x1:x2, y1:y2] = mask
     return full_mask
+
+
+def resize_one_image(image, gt_box, gt_mask, new_shape):
+    original_w, original_h = image.shape[0], image.shape[1]
+
+    new_w, new_h = new_shape[0], new_shape[1]
+    new_image = cv2.resize(image, (new_w, new_h))
+    new_image = new_image[:, :, ::-1]
+
+    gt_box[0], gt_box[2] = int(gt_box[0] * float(new_w) / original_w), int(gt_box[1] * float(new_w) / original_w)
+    gt_box[1], gt_box[3] = int(gt_box[1] * float(new_h) / original_h), int(gt_box[3] * float(new_h) / original_h)
+
+    gt_box[0], gt_box[2] = max(min(gt_box[0], new_w), 0), max(min(gt_box[2], new_w), 0)
+    gt_box[1], gt_box[3] = max(min(gt_box[1], new_h), 0), max(min(gt_box[3], new_h), 0)

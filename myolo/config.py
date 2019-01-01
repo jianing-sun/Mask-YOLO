@@ -19,15 +19,17 @@ class Config(object):
     """
 
     # Number of classification classes (including background)
-    NUM_CLASSES = 1 + 3     # Override in sub-classes
+    NUM_CLASSES = 1 + 1    # Override in sub-classes
     # ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
-    ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
-    LABELS = ['background', 'square', 'circle', 'triangle']
+    # ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
+    # LABELS = ['background', 'square', 'circle', 'triangle']
+    LABELS = ['background', 'rice']
+    ANCHORS = [2.09, 2.48, 2.59, 3.01, 3.60, 3.64, 5.25, 4.56, 6.21, 6.25]
 
-    N_BOX = 3
+    N_BOX = 5
     GRID_H, GRID_W = 7, 7
-    TRUE_BOX_BUFFER = 15
-    BATCH_SIZE = 16
+    TRUE_BOX_BUFFER = 5
+    BATCH_SIZE = 6
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
@@ -47,7 +49,7 @@ class Config(object):
     # handle 2 images of 1024x1024px.
     # Adjust based on your GPU memory and image sizes. Use the highest
     # number that your GPU can handle for best performance.
-    IMAGES_PER_GPU = BATCH_SIZE / GPU_COUNT
+    IMAGES_PER_GPU = (BATCH_SIZE / GPU_COUNT) if GPU_COUNT != 0 else 0
 
     # Number of training steps per epoch
     # This doesn't need to match the size of the training set. Tensorboard
@@ -174,7 +176,7 @@ class Config(object):
     MASK_SHAPE = [28, 28]
 
     # Maximum number of ground truth instances to use in one image
-    MAX_GT_INSTANCES = 15
+    MAX_GT_INSTANCES = 5
 
     # Bounding box refinement standard deviation for RPN and final detections.
     # RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])

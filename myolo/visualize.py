@@ -128,7 +128,7 @@ def display_instances(image, boxes, masks, class_ids, class_names,
         if not np.any(boxes[i]):
             # Skip this instance. Has no bbox. Likely lost in image cropping.
             continue
-        x1, y1, x2, y2 = boxes[i] * 224    # TODO
+        x1, y1, x2, y2 = boxes[i]  # TODO
         if show_bbox:
             p = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=2,
                                 alpha=0.7, linestyle="dashed",
@@ -165,8 +165,8 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
 
-    # if auto_show:
-    #     plt.show()
+    if auto_show:
+        plt.show()
 
     if save_path is not None:
         plt.savefig(save_path)

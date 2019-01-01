@@ -908,7 +908,7 @@ class MaskYOLO:
 
             # YOLO custom loss (bbox loss and binary classification loss)
             yolo_sum_loss = KL.Lambda(lambda x: yolo_custom_loss(*x), name="yolo_sum_loss")(
-                [input_yolo_target, yolo_output, input_true_boxes, config])
+                [input_yolo_target, yolo_output, input_true_boxes])
 
             # Model
             inputs = [input_image, input_true_boxes, input_yolo_target]
@@ -993,14 +993,14 @@ class MaskYOLO:
 
         # Data generators
         train_info = []
-        for id in range(0, 1000):
+        for id in range(0, 53):
             image, gt_class_ids, gt_boxes, gt_masks = \
                 mutils.load_image_gt(train_dataset, config, id,
                                      use_mini_mask=config.USE_MINI_MASK)
             train_info.append([image, gt_class_ids, gt_boxes, gt_masks])
 
         val_info = []
-        for id in range(0, 100):
+        for id in range(0, 6):
             image, gt_class_ids, gt_boxes, gt_masks = \
                 mutils.load_image_gt(val_dataset, config, id,
                                      use_mini_mask=config.USE_MINI_MASK)
