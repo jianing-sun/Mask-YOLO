@@ -17,6 +17,7 @@ import tensorflow as tf
 # used for buliding mobilenet backbone
 from keras_applications import get_keras_submodule
 from keras_applications.mobilenet import _depthwise_conv_block
+from keras_applications.mobilenet_v2 import MobileNetV2
 from mrcnn import utils
 from pytz import timezone
 
@@ -311,7 +312,6 @@ class PyramidROIAlign(KE.Layer):
     - boxes: [batch, num_boxes, (xmin, ymin, xmax, ymax)] in normalized
              coordinates. Possibly padded with zeros if not enough
              boxes to fill the array.
-    - image_meta: [batch, (meta data)] Image details. See compose_image_meta()
     - feature_maps: List of feature maps from different levels of the pyramid.
                     Each is [batch, height, width, channels]
 
@@ -993,7 +993,7 @@ class MaskYOLO:
 
         # Data generators
         train_info = []
-        for id in range(0, 53):
+        for id in range(0, 50):
             image, gt_class_ids, gt_boxes, gt_masks = \
                 mutils.load_image_gt(train_dataset, config, id,
                                      use_mini_mask=config.USE_MINI_MASK)
@@ -1202,7 +1202,7 @@ class MaskYOLO:
         :param display: True for visualizing the yolo result on the input image
         :param save_path
         """
-        assert image.shape == config.IMAGE_SHAPE
+        assert list(image.shape) == config.IMAGE_SHAPE
         assert image.dtype == 'uint8'
         assert self.mode == 'yolo'
 
@@ -1211,10 +1211,10 @@ class MaskYOLO:
         fmt = '%b-%d-%H-%M'
         now = tz.localize(now)
 
-        image /= 255.  # normalize the image to 0~1
+        normed_image = image / 255.  # normalize the image to 0~1
 
         # form the inputs as model required
-        image = np.expand_dims(image, axis=0)
+        normed_image = np.expand_dims(normed_image, axis=0)
         dummy_true_boxes = np.zeros((1, 1, 1, 1, config.TRUE_BOX_BUFFER, 4))
         dummy_target = np.zeros(shape=[1, config.GRID_H, config.GRID_W, config.N_BOX, 4 + 1 + config.NUM_CLASSES])
 
@@ -1222,21 +1222,21 @@ class MaskYOLO:
         self.load_weights(weights_dir)
 
         # model predict for single input image
-        netout = self.keras_model.predict([image, dummy_true_boxes, dummy_target])[0]
+        netout = self.keras_model.predict([normed_image, dummy_true_boxes, dummy_target])[0]
 
         # decode network output
         boxes = mutils.decode_one_yolo_output(netout[0],
                                               anchors=config.ANCHORS,
-                                              nms_threshold=0.7,  # for shapes dataset this could be big
-                                              obj_threshold=0.3,
+                                              nms_threshold=0.3,  # for shapes dataset this could be big
+                                              obj_threshold=0.35,
                                               nb_class=config.NUM_CLASSES)
 
-        image = mutils.draw_boxes(image[0], boxes, labels=self.config.LABELS)
+        normed_image = mutils.draw_boxes(normed_image[0], boxes, labels=self.config.LABELS)
 
-        plt.imshow(image)
+        plt.imshow(normed_image[:, :, ::-1])
         plt.savefig(save_path + 'InferYOLO-' + now.strftime(fmt) + '.png')
 
-    def detect(self, image, weights_dir, save_path='./img_results/', cs_threshold=0.4, display=True, verbose=0):
+    def detect(self, image, weights_dir, save_path='./img_results/', cs_threshold=0.35, display=True):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -1276,10 +1276,10 @@ class MaskYOLO:
 
         # decode network output
         yolo_boxes = mutils.decode_one_yolo_output(yolo_output[0],
-                                              anchors=config.ANCHORS,
-                                              nms_threshold=0.5,  # for shapes dataset this could be big
-                                              obj_threshold=0.3,
-                                              nb_class=config.NUM_CLASSES)
+                                                   anchors=config.ANCHORS,
+                                                   nms_threshold=0.3,  # for shapes dataset this could be big
+                                                   obj_threshold=0.2,
+                                                   nb_class=config.NUM_CLASSES)
 
         # if display:
         #     image = mutils.draw_boxes(image, yolo_boxes, labels=self.config.LABELS)
@@ -1302,9 +1302,10 @@ class MaskYOLO:
         # scores = scores[removed_indices]
         # full_masks = full_masks[removed_indices]
 
-        nmb_indices = mutils.NMB(boxes_temp, class_ids_temp, removed_indices, config.IMAGE_SHAPE)
+        nmb_indices = mutils.NMB(boxes_temp, class_ids_temp, removed_indices, config.IMAGE_SHAPE, nms_threshold=0.7)
 
-        boxes = boxes[nmb_indices]
+        nmb_indices = [109, 130]
+        boxes = np.array([i * 224 for i in boxes[nmb_indices]])
         class_ids = class_ids[nmb_indices]
         scores = scores[nmb_indices]
         full_masks = full_masks[:, :, nmb_indices]
@@ -1320,7 +1321,7 @@ class MaskYOLO:
             "full_masks": full_masks,
         })
 
-        save_path += 'InferMaskYOLO-Shapes-' + now.strftime(fmt) + '.png'
+        save_path += 'InferMaskYOLO-Food-' + now.strftime(fmt) + '.png'
 
         if display:
             visualize.display_instances(image, boxes, full_masks, class_ids, config.LABELS, scores, save_path)

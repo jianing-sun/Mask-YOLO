@@ -28,23 +28,27 @@ dataset_val.prepare()
 
 # img = cv2.imread('/Users/jianingsun/Documents/Research/Nov/mask_food/datasets/rice/train/1.jpg')
 # file = open('./rice_boxes', 'w')
-# for i in range(0, 53):
-#     image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=i, augment=None,
-#                                                                    augmentation=None,
-#                                                                    use_mini_mask=config.USE_MINI_MASK)
+
+image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=0, augment=None,
+                                                               augmentation=None,
+                                                               use_mini_mask=config.USE_MINI_MASK)
 #     file.write(str(gt_boxes[0]) + '\n')
 # file.close()
 # visualize.display_instances(image, gt_boxes, gt_masks, gt_class_ids, dataset_train.class_names)
-
-model = modellib.MaskYOLO(mode="yolo",
+image = cv2.cvtColor(cv2.resize(image, (224, 224)), cv2.COLOR_BGR2RGB)
+image = image[:, :, ::-1]
+model = modellib.MaskYOLO(mode="training",
                           config=config,
                           yolo_pretrain_dir=None,
                           yolo_trainable=True)
-model.load_weights('./saved_model_Jan01-16-40.h5')
-#
-# # model.detect(image, './saved_model_Dec27-14-43.h5')
-model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=20, layers='all')
+print(model.keras_model.summary())
+# model.load_weights('./saved_model_Jan02-09-54.h5')
 
+# model.infer_yolo(image, './saved_model_Jan01-21-14.h5')
+# model.train(dataset_train, dataset_val, learning_rate=config.LEARNING_RATE, epochs=10, layers='all')
+# image = cv2.imread('./test.jpg')
+# image = cv2.cvtColor(cv2.resize(image, (224, 224)), cv2.COLOR_BGR2RGB)
+model.detect(image, './saved_model_Jan02-10-04.h5')
 
 # image, gt_class_ids, gt_boxes, gt_masks = mutils.load_image_gt(dataset_train, config, image_id=440, augment=None,
 #                                                                augmentation=None,

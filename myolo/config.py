@@ -23,13 +23,14 @@ class Config(object):
     # ANCHORS = [1.91, 1.61, 3.53, 2.97, 5.04, 4.38, 6.20, 3.33, 6.67, 4.90]
     # ANCHORS = [1.27273, 1.277385, 2.47446, 2.56253, 4.03843, 4.07434]
     # LABELS = ['background', 'square', 'circle', 'triangle']
-    LABELS = ['background', 'rice']
-    ANCHORS = [2.09, 2.48, 2.59, 3.01, 3.60, 3.64, 5.25, 4.56, 6.21, 6.25]
+    LABELS = ['background', 'food']
+    # ANCHORS = [2.09, 2.48, 2.59, 3.01, 3.60, 3.64, 5.25, 4.56, 6.21, 6.25]
+    ANCHORS = [1.27, 1.31, 1.95, 1.85, 2.40, 2.72, 3.20, 3.32, 5.06, 5.05]
 
     N_BOX = 5
     GRID_H, GRID_W = 7, 7
-    TRUE_BOX_BUFFER = 5
-    BATCH_SIZE = 6
+    TRUE_BOX_BUFFER = 10
+    BATCH_SIZE = 1
     OBJECT_SCALE = 5.0
     COORD_SCALE = 1.0
     CLASS_SCALE = 1.0
@@ -176,7 +177,7 @@ class Config(object):
     MASK_SHAPE = [28, 28]
 
     # Maximum number of ground truth instances to use in one image
-    MAX_GT_INSTANCES = 5
+    MAX_GT_INSTANCES = 10
 
     # Bounding box refinement standard deviation for RPN and final detections.
     # RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])

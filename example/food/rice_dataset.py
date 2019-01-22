@@ -62,7 +62,7 @@ class RiceConfig(Config):
     Derives from the base Config class and overrides some values.
     """
     # Give the configuration a recognizable name
-    NAME = "food"
+    NAME = "rice"
 
     # We use a GPU with 12GB memory, which can fit two images.
     # Adjust down if you use a smaller GPU.
@@ -94,13 +94,13 @@ class RiceDataset(utils.Dataset):
         subset: Subset to load: train or val
         """
         # Add classes. We have only one class to add.
-        self.add_class("food", 1, "food")
+        self.add_class("rice", 1, "rice")
 
         # Train or validation dataset?
         assert subset in ["train", "val"]
         dataset_dir = os.path.join(dataset_dir, subset)
 
-        annotations = json.load(open(os.path.join(dataset_dir, "via_food_annotation.json")))
+        annotations = json.load(open(os.path.join(dataset_dir, "via_rice_annotation.json")))
         annotations = list(annotations.values())  # don't need the dict keys
 
         # The VIA tool saves images in the JSON even if they don't have any
@@ -126,7 +126,7 @@ class RiceDataset(utils.Dataset):
             height, width = image.shape[:2]
 
             self.add_image(
-                "food",
+                "rice",
                 image_id=a['filename'],  # use file name as a unique image id
                 path=image_path,
                 width=width, height=height,
@@ -141,7 +141,7 @@ class RiceDataset(utils.Dataset):
         """
         # If not a balloon dataset image, delegate to parent class.
         image_info = self.image_info[image_id]
-        if image_info["source"] != "food":
+        if image_info["source"] != "rice":
             return super(self.__class__, self).load_mask(image_id)
 
         # Convert polygons to a bitmap mask of shape
@@ -161,7 +161,7 @@ class RiceDataset(utils.Dataset):
     def image_reference(self, image_id):
         """Return the path of the image."""
         info = self.image_info[image_id]
-        if info["source"] == "food":
+        if info["source"] == "rice":
             return info["path"]
         else:
             super(self.__class__, self).image_reference(image_id)

@@ -1,10 +1,11 @@
 import numpy as np
 from example.shapes.dataset_shapes import ShapesDataset, ShapesConfig
-import myolo.model as modellib
+# import myolo.model as modellib
 from myolo import myolo_utils as mutils
 from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import mrcnn.model as modellib
 
 
 config = ShapesConfig()

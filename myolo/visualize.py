@@ -144,8 +144,12 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             caption = "{} {:.3f}".format(label, score) if score else label
         else:
             caption = captions[i]
-        ax.text(x1, y1 + 8, caption,
-                color='w', size=11, backgroundcolor="none")
+        ax.text(x1, y1 - 8, caption, size=11, backgroundcolor="#00FF00", alpha=1)
+
+        # ax.add_patch(Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+        #                        facecolor='none', edgecolor=box_colors[i], linewidth=3.0))
+        # ax.text(xmin, ymax, labels[box.get_label()] + ' ' + str('{0:.3f}'.format(box.get_conf())),
+        #         backgroundcolor=box_colors[i], alpha=1)
 
         # Mask
         mask = masks[:, :, i]
@@ -165,12 +169,11 @@ def display_instances(image, boxes, masks, class_ids, class_names,
             ax.add_patch(p)
     ax.imshow(masked_image.astype(np.uint8))
 
-    if auto_show:
-        plt.show()
+    # if auto_show:
+    #     plt.show()
 
     if save_path is not None:
         plt.savefig(save_path)
-        # plt.savefig('./InferMaskYOLO-Shapes-Dec-28-15-22.png')
 
 
 def display_differences(image,

@@ -85,7 +85,7 @@ def decode_one_yolo_output(netout, anchors, nb_class, obj_threshold=0.3, nms_thr
     return boxes
 
 
-def NMB(boxes, class_ids, indices, image_shape, nms_threshold=0.5):
+def NMB(boxes, class_ids, indices, image_shape, nms_threshold=0.3):
     """ Suppress non-maximal boxes
     :param boxes:
     :param class_ids:
@@ -528,14 +528,14 @@ def data_generator(dataset, config, shuffle=True, augment=False, augmentation=No
             # If the image source is not to be augmented pass None as augmentation
             if dataset.image_info[image_id]['source'] in no_augmentation_sources:
                 image, gt_class_ids, gt_boxes, gt_masks = \
-                load_image_gt(dataset, config, image_id, augment=augment,
-                              augmentation=None,
-                              use_mini_mask=config.USE_MINI_MASK)
+                    load_image_gt(dataset, config, image_id, augment=augment,
+                                  augmentation=None,
+                                  use_mini_mask=config.USE_MINI_MASK)
             else:
                 image, gt_class_ids, gt_boxes, gt_masks = \
                     load_image_gt(dataset, config, image_id, augment=augment,
-                                augmentation=augmentation,
-                                use_mini_mask=config.USE_MINI_MASK)
+                                  augmentation=augmentation,
+                                  use_mini_mask=config.USE_MINI_MASK)
 
             # used for debug
             # fig, ax = plt.subplots(nrows=1, ncols=1)
@@ -759,7 +759,7 @@ class BatchGenerator(Sequence):
 
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > self.config.TRUE_BOX_BUFFER:
-                print('find instances more than 15 in an image')
+                print('find instances more than ' + str(self.config.TRUE_BOX_BUFFER) + ' in an image')
                 ids = np.random.choice(
                     np.arange(gt_boxes.shape[0]), self.config.TRUE_BOX_BUFFER, replace=False)
                 gt_class_ids = gt_class_ids[ids]
