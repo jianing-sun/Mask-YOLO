@@ -5,7 +5,7 @@
 
 <img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/mask_yolo.png" />
 
-- Some training results:
+- Training results on Shapes dataset:
 
 <table sytle="border: 0px;">
 <tr>
@@ -18,3 +18,12 @@
 <td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-33.png" ></td>
 </tr>
 </table>
+
+- Training results on Rice:
+
+<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Rice-Jan-02-15-32" widt="500px"/>
+
+- Training results on Generic Food:
+
+<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Food-Jan-06-19-45" widt="500px"/>
+
