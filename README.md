@@ -26,9 +26,9 @@
 <table sytle="border: 0px;">
 <tr>
 
-<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Rice-Jan-02-15-32.png" widt="500px ></td>
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Rice-Jan-02-15-32.png" widt="300px ></td>
 
-<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Food-Jan-06-19-45.png" widt="500px"/></td>
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Food-Jan-06-19-45.png" widt="300px"/></td>
 
 </tr>
 </table>
