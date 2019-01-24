@@ -7,11 +7,14 @@
 
 - Some training results:
 
-<!-- <div align="center">
-  <img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-29.png">                                                                                                             <img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-31.png">
+<table sytle="border: 0px;">
+<tr>
 
-<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-32.png" >
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-29.png" ></td>
 
-<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-33.png" >
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-31.png" ></td>
 
-</div> -->
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-32.png" ></td>
+<td><img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Shapes-Dec-28-16-33.png" ></td>
+</tr>
+</table>
