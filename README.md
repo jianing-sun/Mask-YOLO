@@ -21,9 +21,9 @@
 
 - Training results on Rice:
 
-<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Rice-Jan-02-15-32" widt="500px"/>
+<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Rice-Jan-02-15-32.png" widt="500px"/>
 
 - Training results on Generic Food:
 
-<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Food-Jan-06-19-45" widt="500px"/>
+<img src="https://github.com/jianing-sun/Mask-YOLO/blob/master/asset/InferMaskYOLO-Food-Jan-06-19-45.png" widt="500px"/>
 
