@@ -18,7 +18,6 @@ import tensorflow as tf
 from keras_applications import get_keras_submodule
 from keras_applications.mobilenet import _depthwise_conv_block
 from keras_applications.mobilenet_v2 import MobileNetV2
-from mrcnn import utils
 from pytz import timezone
 
 from myolo import visualize
